@@ -1,153 +1,84 @@
 # Koor
 
-Lightweight coordination server for AI coding agents — "Redis for AI coding agents."
+Koor is a **coordination server** for AI coding agents — infrastructure, not a framework. Like Redis for caching, Koor provides shared state, specs, and events for any LLM agent that can speak REST or MCP. It's agnostic to IDE, LLM provider, and language.
 
-Koor splits **control** (MCP, thin discovery layer) from **data** (REST + CLI, direct access), so LLMs don't burn tokens routing data through the context window.
+Koor splits **control** (MCP, thin discovery layer) from **data** (REST + CLI, direct access), solving the MCP Token Tax Problem — where all coordination data gets routed through the LLM context window, burning tokens on data the LLM doesn't need to reason about.
+
+## Why Koor Exists
+
+I wanted a programmatic API for IDE LLM coding agents — an external system that can send prompts to, and receive structured responses from, running IDE agents.
+
+The key to effective AI coding is keeping the context window small, so I run an LLM on each of my codebases at project level: one for frontend, one for backend, plus test projects and reference projects — up to 12 or so open at once. I use Cursor, Kilo Code, Claude Code, Antigravity, and others, checking each out for their strengths and weaknesses.
+
+I found myself copying and pasting between IDEs and getting lost. So I built the first version of this app: **MCP-ChattTeam** — a set of workarounds for missing Claude Code APIs, trying to get multiple LLM instances to coordinate across IDEs via MCP hubs, WebSocket bridges, and file watchers.
+
+Then Anthropic shipped Agent SDK and Agent Teams, solving ~80% of the problem natively. The remaining 20% — cross-IDE, cross-LLM, shared state — needed a different architecture. That became Koor.
+
+The architecture centres on a **central authoritative controller** — a documentation-level LLM that doesn't write code itself but orchestrates the project-level IDE LLM instances as a central authority. Each coding agent connects to Koor via MCP regardless of IDE or LLM provider, and the controller coordinates their work through shared state, specs, and events.
+
+**Koor helps everyone stay on plan, conform to the same rules, and stay in sync with each other.**
+
+- **Stay on plan** — specs define scope so each agent knows what to work on
+- **Contained to their part** — agents stay scoped to their own project/codebase
+- **Conform to the same rules** — validation rules enforce consistency across all agents
+- **Stay in sync** — agents share state (API contracts, configs) so they don't diverge from each other
+- **Stay aware** — events let agents know what others have done (e.g. "backend changed the API schema")
+- **Find each other** — instance discovery so agents know who else is working
+
+The developer is released from remembering what, where, and when — and instead becomes a critic and a system-wide designer.
+
+Furthermore, the developer is free to become an AI slop generator! Conducting countless little test-and-learn, look-see experiments — that's more apps, more files, more for a human to get lost in forgetting the reasons why? But the central controller knows what fits where, and eventually every aspect will converge into a bucket of worth and a bucket of valuable history.
+
+<img src="docs/images/Koor01-600.png" alt="Koor Architecture" width="600">
+
+## What's Genuinely New
+
+Koor combines coordination + shared specifications + cross-LLM + standalone binary. As of February 2026, no single system covers all five:
+
+| System | Coordination | Shared State | Shared Specs | Cross-LLM | Standalone |
+|--------|:---:|:---:|:---:|:---:|:---:|
+| Claude Agent Teams | Yes | No | No | No | No |
+| Claude-Flow | Yes | Yes | No | No | No |
+| LangGraph | Yes | Yes | No | No | No |
+| AutoGen | Yes | Yes | No | No | No |
+| A2A Protocol | Yes | No | No | Yes | No |
+| MCP Gateways | No | No | No | Yes | Yes |
+| W2C AI MCP | No | No | Yes | Yes* | Yes |
+| **Koor** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
+
+
 
 ## Quickstart
 
-### Build
-
 ```bash
+# Build
 go build ./cmd/koor-server
 go build ./cmd/koor-cli
-```
 
-### Start the server
-
-```bash
+# Start the server
 ./koor-server
 # API: localhost:9800  Dashboard: localhost:9847
-```
 
-With auth:
-
-```bash
-./koor-server --auth-token secret123
-```
-
-### Use the CLI
-
-```bash
-# Set state
+# Set and get state
 ./koor-cli state set api-contract --data '{"version":"1.0"}'
-
-# Get state
 ./koor-cli state get api-contract
-
-# List state keys
-./koor-cli state list
-
-# Check health
 ./koor-cli status
 ```
 
-### Configuration
+## Documentation
 
-Priority (highest wins): **CLI flags > env vars > config file > defaults**
+Full documentation is in the [docs/](docs/) folder:
 
-| Flag | Env Var | Default |
-|------|---------|---------|
-| `--bind` | `KOOR_BIND` | `localhost:9800` |
-| `--dashboard-bind` | `KOOR_DASHBOARD_BIND` | `localhost:9847` |
-| `--data-dir` | `KOOR_DATA_DIR` | `~/.koor` |
-| `--auth-token` | `KOOR_AUTH_TOKEN` | *(none)* |
-| `--log-level` | `KOOR_LOG_LEVEL` | `info` |
-| `--config` | — | `./koor.config.json` |
-
-Config file (`koor.config.json`):
-
-```json
-{
-  "bind": "localhost:9800",
-  "dashboard_bind": "localhost:9847",
-  "data_dir": "/data/koor",
-  "auth_token": "my-secret",
-  "log_level": "debug"
-}
-
-```
-
-## API Reference
-
-All endpoints except `/health` require `Authorization: Bearer <token>` when auth is enabled.
-
-### Health
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Server health and uptime (no auth) |
-
-### State
-
-Key/value store for shared JSON blobs.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/state` | List all keys (summaries) |
-| `GET` | `/api/state/{key}` | Get value (supports ETag/If-None-Match) |
-| `PUT` | `/api/state/{key}` | Set value (body = raw value) |
-| `DELETE` | `/api/state/{key}` | Delete key |
-
-### Specs
-
-Per-project specification storage.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/specs/{project}` | List specs for project |
-| `GET` | `/api/specs/{project}/{name}` | Get spec (supports ETag) |
-| `PUT` | `/api/specs/{project}/{name}` | Set spec (body = raw data) |
-| `DELETE` | `/api/specs/{project}/{name}` | Delete spec |
-
-### Events
-
-Pub/sub with SQLite-backed history and WebSocket streaming.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/events/publish` | Publish event (`{"topic","data","source"}`) |
-| `GET` | `/api/events/history` | Event history (`?last=N&topic=pattern`) |
-| `GET` | `/api/events/subscribe` | WebSocket stream (`?pattern=topic.*`) |
-
-### Instances
-
-Agent instance registration and discovery.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/instances` | List instances (`?name=&workspace=`) |
-| `GET` | `/api/instances/{id}` | Get instance by ID |
-| `POST` | `/api/instances/register` | Register (`{"name","workspace","intent"}`) |
-| `POST` | `/api/instances/{id}/heartbeat` | Heartbeat (updates last_seen) |
-| `DELETE` | `/api/instances/{id}` | Deregister instance |
-
-### Validation
-
-Rule-based content validation.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/validate/{project}/rules` | List rules |
-| `PUT` | `/api/validate/{project}/rules` | Set rules (replaces all) |
-| `POST` | `/api/validate/{project}` | Validate content against rules |
-
-### MCP
-
-Model Context Protocol endpoint for LLM tool discovery.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/mcp` | StreamableHTTP MCP transport |
-
-**MCP tools:** `register_instance`, `discover_instances`, `set_intent`, `get_endpoints`
-
-### Metrics & Dashboard
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/metrics` | Server metrics (counts) |
-| Dashboard | `localhost:9847` | Live web dashboard (separate port) |
+- **[Getting Started](docs/getting-started.md)** — Install, run, first API call in 5 minutes
+- **[Configuration](docs/configuration.md)** — Flags, env vars, config file, priority rules
+- **[API Reference](docs/api-reference.md)** — Complete REST API documentation
+- **[CLI Reference](docs/cli-reference.md)** — All koor-cli commands
+- **[MCP Guide](docs/mcp-guide.md)** — Connect LLM agents via MCP
+- **[Events Guide](docs/events-guide.md)** — Pub/sub, WebSocket streaming, patterns
+- **[Specs and Validation](docs/specs-and-validation.md)** — Shared specs and validation rules
+- **[Deployment](docs/deployment.md)** — Local, LAN, cloud (Docker, systemd, Windows)
+- **[Architecture](docs/architecture.md)** — Design decisions and rationale
+- **[Troubleshooting](docs/troubleshooting.md)** — Common issues and fixes
 
 ## Architecture
 
@@ -170,6 +101,10 @@ go test ./... -v -count=1    # 52 tests
 go build ./...               # Build all
 ```
 
+## Sponsorship
+
+Koor is free and open source. If it's useful to you or your team, please consider sponsoring the project via [GitHub Sponsors](https://github.com/sponsors/DavidRHerbert).
+
 ## License
 
-Private — all rights reserved.
+MIT License — see [LICENSE](LICENSE) for details.
