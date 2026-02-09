@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Koor Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Koor Dashboard</h1>
+    <span id="status" class="status">connecting...</span>
+  </header>
+
+  <main>
+    <section class="card" id="health-card">
+      <h2>Server Health</h2>
+      <div id="health-info">Loading...</div>
+    </section>
+
+    <section class="card" id="metrics-card">
+      <h2>Metrics</h2>
+      <div id="metrics-info">Loading...</div>
+    </section>
+
+    <section class="card" id="instances-card">
+      <h2>Instances</h2>
+      <div id="instances-info">Loading...</div>
+    </section>
+
+    <section class="card" id="state-card">
+      <h2>State Keys</h2>
+      <div id="state-info">Loading...</div>
+    </section>
+
+    <section class="card" id="events-card">
+      <h2>Recent Events</h2>
+      <div id="events-info">Loading...</div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Koor Coordination Server &mdash; refreshes every 5s</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

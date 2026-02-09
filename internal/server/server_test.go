@@ -373,3 +373,71 @@ func TestInstanceDeregister(t *testing.T) {
 		t.Errorf("get after deregister: expected 404, got %d", resp.StatusCode)
 	}
 }
+
+func TestValidateRulesRoundTrip(t *testing.T) {
+	ts := testServer(t, "")
+
+	// PUT rules.
+	rules := `[{"rule_id":"no-eval","severity":"error","match_type":"regex","pattern":"\\beval\\(","message":"eval is forbidden"}]`
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/validate/myproj/rules", strings.NewReader(rules))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("PUT rules: expected 200, got %d", resp.StatusCode)
+	}
+
+	// GET rules.
+	resp, _ = http.Get(ts.URL + "/api/validate/myproj/rules")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "no-eval") {
+		t.Errorf("rules should contain no-eval: %s", body)
+	}
+}
+
+func TestValidateEndpoint(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Setup a rule.
+	rules := `[{"rule_id":"no-eval","severity":"error","match_type":"regex","pattern":"\\beval\\(","message":"eval bad"}]`
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/validate/proj/rules", strings.NewReader(rules))
+	req.Header.Set("Content-Type", "application/json")
+	http.DefaultClient.Do(req)
+
+	// Validate code with a violation.
+	vReq, _ := http.NewRequest("POST", ts.URL+"/api/validate/proj",
+		strings.NewReader(`{"content":"var x = eval('bad');","filename":"app.js"}`))
+	vReq.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(vReq)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Errorf("validate: expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "no-eval") {
+		t.Errorf("should contain violation: %s", body)
+	}
+	if !strings.Contains(string(body), `"count":1`) {
+		t.Errorf("should have count 1: %s", body)
+	}
+}
+
+func TestMetrics(t *testing.T) {
+	ts := testServer(t, "")
+	resp, _ := http.Get(ts.URL + "/api/metrics")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "uptime") {
+		t.Errorf("metrics should contain uptime: %s", body)
+	}
+	if !strings.Contains(string(body), "state_keys") {
+		t.Errorf("metrics should contain state_keys: %s", body)
+	}
+}

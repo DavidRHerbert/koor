@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"strconv"
 
+	"github.com/DavidRHerbert/koor/internal/dashboard"
 	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/instances"
 	"github.com/DavidRHerbert/koor/internal/specs"
@@ -82,6 +83,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/instances/{id}/heartbeat", s.handleInstanceHeartbeat)
 	mux.HandleFunc("DELETE /api/instances/{id}", s.handleInstanceDeregister)
 
+	// Validation endpoints.
+	mux.HandleFunc("GET /api/validate/{project}/rules", s.handleValidateRulesList)
+	mux.HandleFunc("PUT /api/validate/{project}/rules", s.handleValidateRulesPut)
+	mux.HandleFunc("POST /api/validate/{project}", s.handleValidate)
+
+	// Metrics endpoint.
+	mux.HandleFunc("GET /api/metrics", s.handleMetrics)
+
 	// MCP endpoint (StreamableHTTP).
 	if s.mcpHandler != nil {
 		mux.Handle("/mcp", s.mcpHandler)
@@ -96,10 +105,12 @@ func (s *Server) Handler() http.Handler {
 }
 
 // DashboardHandler returns the HTTP handler for the dashboard (separate port).
+// It proxies /api/* and /health to the API server, and serves embedded static files for everything else.
 func (s *Server) DashboardHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", s.handleDashboard)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /api/", s.dashboardProxy)
+	mux.Handle("GET /", dashboard.Handler())
 	return mux
 }
 
@@ -152,17 +163,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
-// --- Dashboard ---
+// --- Dashboard proxy ---
 
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	// Placeholder until Phase 4 adds the full embedded web dashboard.
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><title>Koor Dashboard</title></head>
-<body><h1>Koor Dashboard</h1><p>Uptime: %s</p>
-<p>API: <code>%s</code></p>
-<p><em>Full dashboard coming in Phase 4.</em></p>
-</body></html>`, time.Since(s.startTime).Truncate(time.Second), s.config.Bind)
+// dashboardProxy forwards API requests from the dashboard port to the API handlers.
+// This avoids CORS issues since the dashboard and API are on different ports.
+func (s *Server) dashboardProxy(w http.ResponseWriter, r *http.Request) {
+	// Re-dispatch through the API handler.
+	s.Handler().ServeHTTP(w, r)
 }
 
 // --- Health ---
@@ -514,6 +521,102 @@ func (s *Server) handleInstanceDeregister(w http.ResponseWriter, r *http.Request
 
 	s.logger.Info("instance deregistered", "id", id)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+}
+
+// --- Validation handlers ---
+
+func (s *Server) handleValidateRulesList(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+
+	rules, err := s.specReg.ListRules(r.Context(), project)
+	if err != nil {
+		s.logger.Error("list rules failed", "project", project, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list rules")
+		return
+	}
+	if rules == nil {
+		rules = []specs.Rule{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project": project,
+		"rules":   rules,
+	})
+}
+
+func (s *Server) handleValidateRulesPut(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+
+	var rules []specs.Rule
+	if err := json.NewDecoder(r.Body).Decode(&rules); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	// Set project on all rules.
+	for i := range rules {
+		rules[i].Project = project
+	}
+
+	if err := s.specReg.PutRules(r.Context(), project, rules); err != nil {
+		s.logger.Error("put rules failed", "project", project, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save rules")
+		return
+	}
+
+	s.logger.Info("rules updated", "project", project, "count", len(rules))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project": project,
+		"count":   len(rules),
+	})
+}
+
+func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+
+	var req specs.ValidateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	violations, err := s.specReg.Validate(r.Context(), project, req)
+	if err != nil {
+		s.logger.Error("validation failed", "project", project, "error", err)
+		writeError(w, http.StatusInternalServerError, "validation failed")
+		return
+	}
+	if violations == nil {
+		violations = []specs.Violation{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project":    project,
+		"violations": violations,
+		"count":      len(violations),
+	})
+}
+
+// --- Metrics handler ---
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// Gather basic system metrics.
+	stateItems, _ := s.stateStore.List(r.Context())
+	instanceItems, _ := s.instanceReg.List(r.Context())
+	recentEvents, _ := s.eventBus.History(r.Context(), 1, "")
+
+	lastEventID := int64(0)
+	if len(recentEvents) > 0 {
+		lastEventID = recentEvents[0].ID
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"uptime":          time.Since(s.startTime).Truncate(time.Second).String(),
+		"state_keys":      len(stateItems),
+		"instances":       len(instanceItems),
+		"last_event_id":   lastEventID,
+		"api_bind":        s.config.Bind,
+		"dashboard_bind":  s.config.DashboardBind,
+	})
 }
 
 // formatInt converts an int64 to string for headers.
