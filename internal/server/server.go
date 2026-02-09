@@ -10,6 +10,10 @@ import (
 	"net/http"
 	"time"
 
+	"encoding/json"
+	"strconv"
+
+	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
 )
@@ -27,16 +31,18 @@ type Server struct {
 	config     Config
 	stateStore *state.Store
 	specReg    *specs.Registry
+	eventBus   *events.Bus
 	startTime  time.Time
 	logger     *slog.Logger
 }
 
 // New creates a new Server.
-func New(cfg Config, stateStore *state.Store, specReg *specs.Registry, logger *slog.Logger) *Server {
+func New(cfg Config, stateStore *state.Store, specReg *specs.Registry, eventBus *events.Bus, logger *slog.Logger) *Server {
 	return &Server{
 		config:     cfg,
 		stateStore: stateStore,
 		specReg:    specReg,
+		eventBus:   eventBus,
 		startTime:  time.Now(),
 		logger:     logger,
 	}
@@ -58,6 +64,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/specs/{project}/{name}", s.handleSpecsGet)
 	mux.HandleFunc("PUT /api/specs/{project}/{name}", s.handleSpecsPut)
 	mux.HandleFunc("DELETE /api/specs/{project}/{name}", s.handleSpecsDelete)
+
+	// Events endpoints.
+	mux.HandleFunc("POST /api/events/publish", s.handleEventsPublish)
+	mux.HandleFunc("GET /api/events/history", s.handleEventsHistory)
+	mux.Handle("GET /api/events/subscribe", events.ServeSubscribe(s.eventBus, s.logger))
 
 	// Outer mux: health is public, everything else goes through auth.
 	outer := http.NewServeMux()
@@ -339,8 +350,56 @@ func (s *Server) handleSpecsDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": project + "/" + name})
 }
 
+// --- Events handlers ---
+
+func (s *Server) handleEventsPublish(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Topic string          `json:"topic"`
+		Data  json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Topic == "" {
+		writeError(w, http.StatusBadRequest, "topic is required")
+		return
+	}
+
+	ev, err := s.eventBus.Publish(r.Context(), req.Topic, req.Data, "")
+	if err != nil {
+		s.logger.Error("event publish failed", "topic", req.Topic, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to publish event")
+		return
+	}
+
+	s.logger.Info("event published", "topic", req.Topic, "id", ev.ID)
+	writeJSON(w, http.StatusOK, ev)
+}
+
+func (s *Server) handleEventsHistory(w http.ResponseWriter, r *http.Request) {
+	last := 50
+	if v := r.URL.Query().Get("last"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			last = n
+		}
+	}
+	topic := r.URL.Query().Get("topic")
+
+	history, err := s.eventBus.History(r.Context(), last, topic)
+	if err != nil {
+		s.logger.Error("event history failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get event history")
+		return
+	}
+	if history == nil {
+		history = []events.Event{}
+	}
+	writeJSON(w, http.StatusOK, history)
+}
+
 // formatInt converts an int64 to string for headers.
 func formatInt(n int64) string {
-	return fmt.Sprintf("%d", n)
+	return strconv.FormatInt(n, 10)
 }
 

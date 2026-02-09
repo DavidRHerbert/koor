@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/DavidRHerbert/koor/internal/db"
+	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/server"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
@@ -24,13 +25,14 @@ func testServer(t *testing.T, authToken string) *httptest.Server {
 
 	stateStore := state.New(database)
 	specReg := specs.New(database)
+	eventBus := events.New(database, 1000)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	cfg := server.Config{
 		Bind:      "localhost:0",
 		AuthToken: authToken,
 	}
-	srv := server.New(cfg, stateStore, specReg, logger)
+	srv := server.New(cfg, stateStore, specReg, eventBus, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts
@@ -223,5 +225,60 @@ func TestETagCaching(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 304 {
 		t.Errorf("expected 304, got %d", resp.StatusCode)
+	}
+}
+
+func TestEventsPublishAndHistory(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Publish an event.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/events/publish",
+		strings.NewReader(`{"topic":"api.change","data":{"field":"name"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("publish: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Get history.
+	resp, err = http.Get(ts.URL + "/api/events/history?last=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "api.change") {
+		t.Errorf("history should contain event: %s", body)
+	}
+}
+
+func TestEventsPublishValidation(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Missing topic.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/events/publish",
+		strings.NewReader(`{"data":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for missing topic, got %d", resp.StatusCode)
+	}
+}
+
+func TestEventsHistoryEmpty(t *testing.T) {
+	ts := testServer(t, "")
+	resp, _ := http.Get(ts.URL + "/api/events/history")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	if string(body) != "[]\n" {
+		t.Errorf("expected empty array, got: %s", body)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/DavidRHerbert/koor/internal/db"
+	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/server"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
@@ -84,6 +85,7 @@ func main() {
 	// Create stores.
 	stateStore := state.New(database)
 	specReg := specs.New(database)
+	eventBus := events.New(database, 1000)
 
 	// Create server.
 	cfg := server.Config{
@@ -92,7 +94,7 @@ func main() {
 		DataDir:       *dataDir,
 		AuthToken:     *authToken,
 	}
-	srv := server.New(cfg, stateStore, specReg, logger)
+	srv := server.New(cfg, stateStore, specReg, eventBus, logger)
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

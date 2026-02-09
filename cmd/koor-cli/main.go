@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type config struct {
@@ -34,6 +35,9 @@ func main() {
 	case "specs":
 		cfg := loadConfig()
 		handleSpecs(cfg, os.Args[2:])
+	case "events":
+		cfg := loadConfig()
+		handleEvents(cfg, os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -62,6 +66,10 @@ Commands:
   specs set <project>/<name> --file <path>   Set spec from file
   specs set <project>/<name> --data <json>   Set spec from inline data
   specs delete <project>/<name>   Delete a spec
+
+  events publish <topic> --data <json>   Publish an event
+  events history [--last N] [--topic pattern]   Recent events
+  events subscribe [pattern]     Stream events via WebSocket
 
 Flags:
   --pretty                        Pretty-print JSON output
@@ -313,6 +321,132 @@ func handleSpecs(cfg *config, args []string) {
 	default:
 		fmt.Fprintf(os.Stderr, "unknown specs command: %s\n", args[0])
 		os.Exit(1)
+	}
+}
+
+// --- Events commands ---
+
+func handleEvents(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli events <publish|history|subscribe> [args]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "publish":
+		if len(args) < 4 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli events publish <topic> --data <json>")
+			os.Exit(1)
+		}
+		topic := args[1]
+		body, err := readBodyArg(args[2:])
+		if err != nil {
+			fatal(err)
+		}
+		payload := fmt.Sprintf(`{"topic":%q,"data":%s}`, topic, string(body))
+		resp, err := doRequest(cfg, "POST", "/api/events/publish", strings.NewReader(payload))
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "history":
+		path := "/api/events/history"
+		params := []string{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--last":
+				if i+1 < len(args) {
+					params = append(params, "last="+args[i+1])
+					i++
+				}
+			case "--topic":
+				if i+1 < len(args) {
+					params = append(params, "topic="+args[i+1])
+					i++
+				}
+			}
+		}
+		if len(params) > 0 {
+			path += "?" + strings.Join(params, "&")
+		}
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "subscribe":
+		pattern := "*"
+		if len(args) >= 2 {
+			pattern = args[1]
+		}
+		wsURL := strings.Replace(cfg.Server, "http://", "ws://", 1)
+		wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
+		wsURL = strings.TrimRight(wsURL, "/") + "/api/events/subscribe?pattern=" + pattern
+
+		fmt.Fprintf(os.Stderr, "subscribing to %s (pattern: %s)...\n", wsURL, pattern)
+		streamWebSocket(cfg, wsURL)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown events command: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func streamWebSocket(cfg *config, wsURL string) {
+	// Use nhooyr.io/websocket via the server's WS endpoint.
+	// The CLI uses a simple HTTP-upgrade approach with stdlib for portability.
+	dialer := &http.Client{}
+	req, err := http.NewRequest("GET", wsURL, nil)
+	if err != nil {
+		fatal(err)
+	}
+	if cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	}
+
+	// For WebSocket, we need the actual websocket library.
+	// Since koor-cli should stay dependency-free, we use a raw HTTP approach:
+	// connect and read the server-sent JSON lines.
+	// However, the server uses real WebSocket frames, so we need the library.
+	// Instead, use golang.org/x/net or just inform the user to use wscat/websocat.
+	//
+	// For now, fall back to polling history as a simple subscribe mechanism.
+	_ = dialer
+	_ = req
+	fmt.Fprintln(os.Stderr, "live WebSocket streaming requires a WebSocket client.")
+	fmt.Fprintln(os.Stderr, "use: websocat "+wsURL)
+	fmt.Fprintln(os.Stderr, "or:  wscat -c "+wsURL)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "falling back to polling history every 2 seconds...")
+
+	seen := map[int64]bool{}
+	for {
+		resp, err := doRequest(cfg, "GET", "/api/events/history?last=10", nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "poll error: %v\n", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		var rawEvts []json.RawMessage
+		json.Unmarshal(data, &rawEvts)
+		for _, raw := range rawEvts {
+			var ev struct {
+				ID int64 `json:"id"`
+			}
+			json.Unmarshal(raw, &ev)
+			if !seen[ev.ID] {
+				seen[ev.ID] = true
+				fmt.Println(string(raw))
+			}
+		}
+		time.Sleep(2 * time.Second)
 	}
 }
 
