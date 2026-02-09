@@ -38,6 +38,12 @@ func main() {
 	case "events":
 		cfg := loadConfig()
 		handleEvents(cfg, os.Args[2:])
+	case "instances":
+		cfg := loadConfig()
+		handleInstances(cfg, os.Args[2:])
+	case "register":
+		cfg := loadConfig()
+		handleRegister(cfg, os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -70,6 +76,10 @@ Commands:
   events publish <topic> --data <json>   Publish an event
   events history [--last N] [--topic pattern]   Recent events
   events subscribe [pattern]     Stream events via WebSocket
+
+  register <name> [--workspace <path>] [--intent <text>]   Register this agent
+  instances list                 List registered instances
+  instances get <id>             Get instance details
 
 Flags:
   --pretty                        Pretty-print JSON output
@@ -447,6 +457,73 @@ func streamWebSocket(cfg *config, wsURL string) {
 			}
 		}
 		time.Sleep(2 * time.Second)
+	}
+}
+
+// --- Instance commands ---
+
+func handleRegister(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli register <name> [--workspace <path>] [--intent <text>]")
+		os.Exit(1)
+	}
+	name := args[0]
+	workspace := ""
+	intent := ""
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--workspace":
+			if i+1 < len(args) {
+				workspace = args[i+1]
+				i++
+			}
+		case "--intent":
+			if i+1 < len(args) {
+				intent = args[i+1]
+				i++
+			}
+		}
+	}
+
+	payload := fmt.Sprintf(`{"name":%q,"workspace":%q,"intent":%q}`, name, workspace, intent)
+	resp, err := doRequest(cfg, "POST", "/api/instances/register", strings.NewReader(payload))
+	if err != nil {
+		fatal(err)
+	}
+	defer resp.Body.Close()
+	printResponse(resp)
+}
+
+func handleInstances(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli instances <list|get> [args]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "list":
+		resp, err := doRequest(cfg, "GET", "/api/instances", nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "get":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli instances get <id>")
+			os.Exit(1)
+		}
+		resp, err := doRequest(cfg, "GET", "/api/instances/"+args[1], nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown instances command: %s\n", args[0])
+		os.Exit(1)
 	}
 }
 

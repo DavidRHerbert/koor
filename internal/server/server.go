@@ -14,6 +14,7 @@ import (
 	"strconv"
 
 	"github.com/DavidRHerbert/koor/internal/events"
+	"github.com/DavidRHerbert/koor/internal/instances"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
 )
@@ -28,23 +29,27 @@ type Config struct {
 
 // Server is the Koor HTTP server.
 type Server struct {
-	config     Config
-	stateStore *state.Store
-	specReg    *specs.Registry
-	eventBus   *events.Bus
-	startTime  time.Time
-	logger     *slog.Logger
+	config      Config
+	stateStore  *state.Store
+	specReg     *specs.Registry
+	eventBus    *events.Bus
+	instanceReg *instances.Registry
+	mcpHandler  http.Handler
+	startTime   time.Time
+	logger      *slog.Logger
 }
 
 // New creates a new Server.
-func New(cfg Config, stateStore *state.Store, specReg *specs.Registry, eventBus *events.Bus, logger *slog.Logger) *Server {
+func New(cfg Config, stateStore *state.Store, specReg *specs.Registry, eventBus *events.Bus, instanceReg *instances.Registry, mcpHandler http.Handler, logger *slog.Logger) *Server {
 	return &Server{
-		config:     cfg,
-		stateStore: stateStore,
-		specReg:    specReg,
-		eventBus:   eventBus,
-		startTime:  time.Now(),
-		logger:     logger,
+		config:      cfg,
+		stateStore:  stateStore,
+		specReg:     specReg,
+		eventBus:    eventBus,
+		instanceReg: instanceReg,
+		mcpHandler:  mcpHandler,
+		startTime:   time.Now(),
+		logger:      logger,
 	}
 }
 
@@ -69,6 +74,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/events/publish", s.handleEventsPublish)
 	mux.HandleFunc("GET /api/events/history", s.handleEventsHistory)
 	mux.Handle("GET /api/events/subscribe", events.ServeSubscribe(s.eventBus, s.logger))
+
+	// Instance endpoints.
+	mux.HandleFunc("GET /api/instances", s.handleInstancesList)
+	mux.HandleFunc("GET /api/instances/{id}", s.handleInstanceGet)
+	mux.HandleFunc("POST /api/instances/register", s.handleInstanceRegister)
+	mux.HandleFunc("POST /api/instances/{id}/heartbeat", s.handleInstanceHeartbeat)
+	mux.HandleFunc("DELETE /api/instances/{id}", s.handleInstanceDeregister)
+
+	// MCP endpoint (StreamableHTTP).
+	if s.mcpHandler != nil {
+		mux.Handle("/mcp", s.mcpHandler)
+	}
 
 	// Outer mux: health is public, everything else goes through auth.
 	outer := http.NewServeMux()
@@ -396,6 +413,107 @@ func (s *Server) handleEventsHistory(w http.ResponseWriter, r *http.Request) {
 		history = []events.Event{}
 	}
 	writeJSON(w, http.StatusOK, history)
+}
+
+// --- Instance handlers ---
+
+func (s *Server) handleInstancesList(w http.ResponseWriter, r *http.Request) {
+	items, err := s.instanceReg.List(r.Context())
+	if err != nil {
+		s.logger.Error("instances list failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list instances")
+		return
+	}
+	if items == nil {
+		items = []instances.Summary{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleInstanceGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	inst, err := s.instanceReg.Get(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "instance not found: "+id)
+		return
+	}
+	if err != nil {
+		s.logger.Error("instance get failed", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get instance")
+		return
+	}
+
+	// Don't expose token in GET responses.
+	writeJSON(w, http.StatusOK, instances.Summary{
+		ID:           inst.ID,
+		Name:         inst.Name,
+		Workspace:    inst.Workspace,
+		Intent:       inst.Intent,
+		RegisteredAt: inst.RegisteredAt,
+		LastSeen:     inst.LastSeen,
+	})
+}
+
+func (s *Server) handleInstanceRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name      string `json:"name"`
+		Workspace string `json:"workspace"`
+		Intent    string `json:"intent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	inst, err := s.instanceReg.Register(r.Context(), req.Name, req.Workspace, req.Intent)
+	if err != nil {
+		s.logger.Error("instance register failed", "name", req.Name, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to register instance")
+		return
+	}
+
+	s.logger.Info("instance registered", "id", inst.ID, "name", inst.Name)
+	writeJSON(w, http.StatusOK, inst)
+}
+
+func (s *Server) handleInstanceHeartbeat(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	err := s.instanceReg.Heartbeat(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "instance not found: "+id)
+		return
+	}
+	if err != nil {
+		s.logger.Error("instance heartbeat failed", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to heartbeat")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "ok"})
+}
+
+func (s *Server) handleInstanceDeregister(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	err := s.instanceReg.Deregister(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "instance not found: "+id)
+		return
+	}
+	if err != nil {
+		s.logger.Error("instance deregister failed", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to deregister")
+		return
+	}
+
+	s.logger.Info("instance deregistered", "id", id)
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
 }
 
 // formatInt converts an int64 to string for headers.

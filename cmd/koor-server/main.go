@@ -12,7 +12,10 @@ import (
 
 	"github.com/DavidRHerbert/koor/internal/db"
 	"github.com/DavidRHerbert/koor/internal/events"
+	"github.com/DavidRHerbert/koor/internal/instances"
+	koormcp "github.com/DavidRHerbert/koor/internal/mcp"
 	"github.com/DavidRHerbert/koor/internal/server"
+	"github.com/DavidRHerbert/koor/internal/server/serverconfig"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
 )
@@ -86,6 +89,12 @@ func main() {
 	stateStore := state.New(database)
 	specReg := specs.New(database)
 	eventBus := events.New(database, 1000)
+	instanceReg := instances.New(database)
+
+	// Create MCP transport.
+	mcpTransport := koormcp.New(instanceReg, serverconfig.Endpoints{
+		APIBase: "http://" + *bind,
+	})
 
 	// Create server.
 	cfg := server.Config{
@@ -94,7 +103,7 @@ func main() {
 		DataDir:       *dataDir,
 		AuthToken:     *authToken,
 	}
-	srv := server.New(cfg, stateStore, specReg, eventBus, logger)
+	srv := server.New(cfg, stateStore, specReg, eventBus, instanceReg, mcpTransport, logger)
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

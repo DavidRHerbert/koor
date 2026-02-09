@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/DavidRHerbert/koor/internal/db"
 	"github.com/DavidRHerbert/koor/internal/events"
+	"github.com/DavidRHerbert/koor/internal/instances"
 	"github.com/DavidRHerbert/koor/internal/server"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
@@ -26,13 +28,14 @@ func testServer(t *testing.T, authToken string) *httptest.Server {
 	stateStore := state.New(database)
 	specReg := specs.New(database)
 	eventBus := events.New(database, 1000)
+	instanceReg := instances.New(database)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	cfg := server.Config{
 		Bind:      "localhost:0",
 		AuthToken: authToken,
 	}
-	srv := server.New(cfg, stateStore, specReg, eventBus, logger)
+	srv := server.New(cfg, stateStore, specReg, eventBus, instanceReg, nil, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts
@@ -280,5 +283,93 @@ func TestEventsHistoryEmpty(t *testing.T) {
 	}
 	if string(body) != "[]\n" {
 		t.Errorf("expected empty array, got: %s", body)
+	}
+}
+
+func TestInstanceRegisterAndList(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Register an instance.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/instances/register",
+		strings.NewReader(`{"name":"claude-test","workspace":"/tmp","intent":"testing"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("register: expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "claude-test") {
+		t.Errorf("register response should contain name: %s", body)
+	}
+	if !strings.Contains(string(body), `"token"`) {
+		t.Errorf("register response should contain token: %s", body)
+	}
+
+	// List instances.
+	resp2, _ := http.Get(ts.URL + "/api/instances")
+	defer resp2.Body.Close()
+	body2, _ := io.ReadAll(resp2.Body)
+	if !strings.Contains(string(body2), "claude-test") {
+		t.Errorf("list should contain registered instance: %s", body2)
+	}
+}
+
+func TestInstanceRegisterValidation(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Missing name.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/instances/register",
+		strings.NewReader(`{"workspace":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for missing name, got %d", resp.StatusCode)
+	}
+}
+
+func TestInstanceGetNotFound(t *testing.T) {
+	ts := testServer(t, "")
+	resp, _ := http.Get(ts.URL + "/api/instances/nonexistent")
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestInstanceDeregister(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Register first.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/instances/register",
+		strings.NewReader(`{"name":"temp-agent"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Extract ID from response.
+	var result struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(body, &result)
+
+	// Deregister.
+	req, _ = http.NewRequest("DELETE", ts.URL+"/api/instances/"+result.ID, nil)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("deregister: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Get should now 404.
+	resp, _ = http.Get(ts.URL + "/api/instances/" + result.ID)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("get after deregister: expected 404, got %d", resp.StatusCode)
 	}
 }
