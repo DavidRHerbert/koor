@@ -1,0 +1,7 @@
+{
+  "bind": "localhost:9800",
+  "dashboard_bind": "localhost:9847",
+  "data_dir": "",
+  "auth_token": "",
+  "log_level": "info"
+}

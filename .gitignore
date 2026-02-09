@@ -1,0 +1,20 @@
+# Binaries (root-level only)
+/koor-server
+/koor-server.exe
+/koor-cli
+/koor-cli.exe
+
+# Data directory
+.koor/
+
+# IDE / tools
+.idea/
+.vscode/
+.claude/
+*.swp
+
+# Internal prompts/planning docs
+Doc/Promptin/
+
+# Go
+/vendor/
