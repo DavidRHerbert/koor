@@ -31,6 +31,7 @@ type Bus struct {
 	maxHistory  int
 	mu          sync.RWMutex
 	subscribers []*Subscriber
+	stopPrune   chan struct{}
 }
 
 // New creates a new event Bus.
@@ -41,7 +42,41 @@ func New(db *sql.DB, maxHistory int) *Bus {
 	return &Bus{
 		db:         db,
 		maxHistory: maxHistory,
+		stopPrune:  make(chan struct{}),
 	}
+}
+
+// StartPruning launches a background goroutine that periodically removes
+// events beyond maxHistory. Call Stop() to shut it down.
+func (b *Bus) StartPruning(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				b.Prune()
+			case <-b.stopPrune:
+				return
+			}
+		}
+	}()
+}
+
+// Stop shuts down the background pruning goroutine.
+func (b *Bus) Stop() {
+	select {
+	case b.stopPrune <- struct{}{}:
+	default:
+	}
+}
+
+// Prune removes events beyond maxHistory. Called automatically by
+// StartPruning, but can also be invoked manually.
+func (b *Bus) Prune() {
+	b.db.Exec(
+		`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)`,
+		b.maxHistory)
 }
 
 // Subscribe registers a subscriber for events matching pattern.
@@ -87,11 +122,6 @@ func (b *Bus) Publish(ctx context.Context, topic string, data json.RawMessage, s
 	if err != nil {
 		return nil, fmt.Errorf("read back event: %w", err)
 	}
-
-	// Prune old events beyond maxHistory.
-	b.db.ExecContext(ctx,
-		`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)`,
-		b.maxHistory)
 
 	// Fan out to subscribers.
 	b.mu.RLock()

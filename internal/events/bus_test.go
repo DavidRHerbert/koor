@@ -141,6 +141,9 @@ func TestPruning(t *testing.T) {
 		bus.Publish(ctx, "test", json.RawMessage(`"x"`), "")
 	}
 
+	// Pruning is now background; trigger it manually for test.
+	bus.Prune()
+
 	history, err := bus.History(ctx, 100, "")
 	if err != nil {
 		t.Fatal(err)

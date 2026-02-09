@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/DavidRHerbert/koor/internal/db"
 	"github.com/DavidRHerbert/koor/internal/events"
@@ -104,6 +105,10 @@ func main() {
 		AuthToken:     *authToken,
 	}
 	srv := server.New(cfg, stateStore, specReg, eventBus, instanceReg, mcpTransport, logger)
+
+	// Start background event pruning (every 60 seconds).
+	eventBus.StartPruning(60 * time.Second)
+	defer eventBus.Stop()
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
