@@ -49,6 +49,45 @@ async function refreshHealth() {
   ]);
 }
 
+async function refreshTokenTax() {
+  const data = await fetchJSON('/api/metrics');
+  const el = document.getElementById('token-tax-info');
+
+  if (!data || !data.token_tax) {
+    el.innerHTML = '<p class="empty">No token tax data</p>';
+    return;
+  }
+
+  const tt = data.token_tax;
+  const saved = tt.rest_tokens_saved || 0;
+  const mcpTokens = tt.mcp_estimated_tokens || 0;
+  const pct = tt.savings_percent || 0;
+  const barWidth = Math.min(pct, 100);
+
+  el.innerHTML = `
+    <div class="tt-big-number">${saved.toLocaleString()} tokens saved</div>
+    <div class="tt-bar-container">
+      <div class="tt-bar-fill" style="width:${barWidth}%"></div>
+      <span class="tt-bar-label">${pct.toFixed(1)}% bypass rate</span>
+    </div>
+    <div class="tt-stats">
+      <div class="tt-stat">
+        <span class="tt-stat-value">${tt.rest_calls}</span>
+        <span class="tt-stat-label">REST/CLI calls</span>
+      </div>
+      <div class="tt-stat">
+        <span class="tt-stat-value">${tt.mcp_calls}</span>
+        <span class="tt-stat-label">MCP calls</span>
+      </div>
+      <div class="tt-stat">
+        <span class="tt-stat-value">${mcpTokens.toLocaleString()}</span>
+        <span class="tt-stat-label">MCP tokens used</span>
+      </div>
+    </div>
+    <p class="tt-explainer">MCP calls flow through the LLM context window (cost tokens). REST/CLI calls bypass it entirely (zero tokens).</p>
+  `;
+}
+
 async function refreshMetrics() {
   const data = await fetchJSON('/api/metrics');
   const el = document.getElementById('metrics-info');
@@ -119,6 +158,7 @@ async function refreshEvents() {
 
 async function refresh() {
   await Promise.all([
+    refreshTokenTax(),
     refreshHealth(),
     refreshMetrics(),
     refreshInstances(),

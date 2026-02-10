@@ -48,41 +48,94 @@ Koor combines coordination + shared specifications + cross-LLM + standalone bina
 
 
 
+## How It Works
+
+1. Run `koor-wizard` — interactive TUI scaffolds your entire project (Controller + agents)
+2. Start `koor-server`
+3. Open each workspace in your IDE (Claude Code, Cursor, or any MCP-capable LLM)
+4. Say **"next"** — each agent registers with Koor, reads its task, and starts working
+5. Agents coordinate through Koor — the user **approves, never relays**
+
+`koor-wizard` generates all the config files for both Claude Code and Cursor automatically — CLAUDE.md, .cursorrules, .claude/mcp.json, .cursor/mcp.json — with strict sandbox rules that keep each agent in its own workspace. You can even open multiple IDEs on the same codebase simultaneously.
+
+### User's Vocabulary
+
+| Word | Where | What it does |
+|------|-------|-------------|
+| **"setup agents"** | Controller | Generate CLAUDE.md + MCP config for each agent |
+| **"next"** | Any agent | Check Koor for your task/events and proceed |
+| **"yes"** | Controller | Approve the request |
+| **"no"** | Controller | Reject the request |
+| **"check requests"** | Controller | Look at pending requests in Koor events |
+| **"status"** | Controller | Give me an overview of where everything stands |
+
+Six words to set up and run a multi-agent project.
+
+### What Koor Provides
+
+| Primitive | Role |
+|-----------|------|
+| **MCP** | Agents register and discover each other on startup |
+| **State** | Task assignments (agents read when user says "next") |
+| **Events** | Done/request/approval notifications (agents check via CLI) |
+| **Contracts** | Shared API contracts with schema validation |
+| **Validation** | Automated code quality per stack |
+| **Token Tax** | Dashboard tracks MCP vs REST calls and token savings |
+| **Dashboard** | Visual overview at :9847 |
+| **Wizard** | `koor-wizard` scaffolds entire projects interactively |
+| **Event history** | Survives context resets — agent can re-read what happened |
+
+### What the Controller's Files Provide
+
+| File | Role |
+|------|------|
+| plan/overview.md | Master plan (editable, in plain sight) |
+| plan/api-contract.md | API contract (Controller updates on approvals) |
+| plan/decisions/*.md | Decision log (grows as project evolves) |
+| status/*.md | Progress tracking per agent |
+
+See the full guide: **[Multi-Agent Workflow](docs/multi-agent-workflow.md)**
+
 ## Quickstart
 
 ```bash
-# Build
+# Build all three binaries
 go build ./cmd/koor-server
 go build ./cmd/koor-cli
+go build ./cmd/koor-wizard
 
 # Start the server
 ./koor-server
 # API: localhost:9800  Dashboard: localhost:9847
 
-# Set and get state
+# Scaffold a new multi-agent project
+./koor-wizard
+# Interactive TUI: choose project name, agents, stacks
+# Generates all directories, CLAUDE.md, .cursorrules, MCP configs
+
+# Or use the CLI directly
 ./koor-cli state set api-contract --data '{"version":"1.0"}'
 ./koor-cli state get api-contract
 ./koor-cli status
 ```
 
-## Multi-Agent Workflow
+### IDE Support
 
-Koor enables a **Controller + Agent** pattern for fullstack development:
+The wizard generates config for multiple IDEs automatically:
 
-1. **Set up a Controller** — a VS Code instance with the project plan as local files
-2. **Controller generates configs** — AGENTS.md files for Frontend, Backend, etc.
-3. **Drop files, say "next"** — each agent reads its task from Koor and starts working
-4. **Agents coordinate through Koor** — events for requests, state for task assignments
-5. **User approves, never relays** — six words run the project: "setup agents", "next", "yes", "no", "check requests", "status"
+| IDE | Rules file | MCP config |
+|-----|-----------|------------|
+| Claude Code | `CLAUDE.md` | `.claude/mcp.json` |
+| Cursor | `.cursorrules` | `.cursor/mcp.json` |
 
-See the full guide: **[Multi-Agent Workflow](docs/multi-agent-workflow.md)**
+Both IDEs can open the same workspace simultaneously — each connects to Koor independently via MCP.
 
 ## Documentation
 
 Full documentation is in the [docs/](docs/) folder:
 
 - **[Getting Started](docs/getting-started.md)** — Install, run, first API call in 5 minutes
-- **[Multi-Agent Workflow](docs/multi-agent-workflow.md)** — Coordinate multiple LLM agents across VS Code instances
+- **[Multi-Agent Workflow](docs/multi-agent-workflow.md)** — Coordinate multiple LLM agents across IDE instances
 - **[Configuration](docs/configuration.md)** — Flags, env vars, config file, priority rules
 - **[API Reference](docs/api-reference.md)** — Complete REST API documentation
 - **[CLI Reference](docs/cli-reference.md)** — All koor-cli commands
@@ -103,14 +156,14 @@ Agent ──REST──/
 CLI ───REST───/
 ```
 
-- **3 dependencies:** modernc.org/sqlite, nhooyr.io/websocket, mark3labs/mcp-go
+- **4 dependencies:** modernc.org/sqlite, nhooyr.io/websocket, mark3labs/mcp-go, charmbracelet/huh
 - **Pure Go:** CGO_ENABLED=0, cross-compiles to all platforms
-- **Single binary:** embed dashboard static files via go:embed
+- **3 binaries:** koor-server (embed dashboard via go:embed), koor-cli, koor-wizard
 
 ## Development
 
 ```bash
-go test ./... -v -count=1    # 68 tests
+go test ./... -v -count=1    # 86 tests
 go build ./...               # Build all
 ```
 

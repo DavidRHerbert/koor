@@ -3,6 +3,8 @@
 /koor-server.exe
 /koor-cli
 /koor-cli.exe
+/koor-wizard
+/koor-wizard.exe
 
 # Data directory
 .koor/

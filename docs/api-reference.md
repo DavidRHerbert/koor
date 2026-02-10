@@ -79,9 +79,9 @@ List all state keys. Returns summaries (no values).
 
 Returns an empty array `[]` when no keys exist.
 
-### GET /api/state/{key}
+### GET /api/state/{key...}
 
-Get the value for a key. Returns the raw stored value with its original content type.
+Get the value for a key. Keys can contain slashes for project scoping (e.g. `Truck-Wash/backend-task`). Returns the raw stored value with its original content type.
 
 **Response Headers**
 
@@ -108,9 +108,9 @@ Response `304` with empty body if unchanged.
 {"error": "key not found: api-contract", "code": 404}
 ```
 
-### PUT /api/state/{key}
+### PUT /api/state/{key...}
 
-Create or update a state entry. Send the raw value as the request body (up to 10 MB).
+Create or update a state entry. Keys can contain slashes for project scoping (e.g. `Truck-Wash/backend-task`). Send the raw value as the request body (up to 10 MB).
 
 **Request Headers**
 
@@ -140,9 +140,9 @@ Version starts at 1 for new keys and increments by 1 on each update.
 {"error": "empty body", "code": 400}
 ```
 
-### DELETE /api/state/{key}
+### DELETE /api/state/{key...}
 
-Delete a state entry.
+Delete a state entry. Keys can contain slashes for project scoping.
 
 **Response** `200`
 

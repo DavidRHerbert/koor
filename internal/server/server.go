@@ -8,12 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"encoding/json"
 	"strconv"
 	"strings"
 
+	"github.com/DavidRHerbert/koor/internal/contracts"
 	"github.com/DavidRHerbert/koor/internal/dashboard"
 	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/instances"
@@ -39,6 +41,8 @@ type Server struct {
 	mcpHandler  http.Handler
 	startTime   time.Time
 	logger      *slog.Logger
+	mcpCalls    atomic.Int64 // MCP tool calls (go through LLM context)
+	restCalls   atomic.Int64 // REST/CLI calls (bypass LLM context)
 }
 
 // New creates a new Server.
@@ -55,53 +59,73 @@ func New(cfg Config, stateStore *state.Store, specReg *specs.Registry, eventBus 
 	}
 }
 
+// countREST wraps a handler to count REST/CLI calls.
+func (s *Server) countREST(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.restCalls.Add(1)
+		next(w, r)
+	}
+}
+
+// countMCP wraps a handler to count MCP calls.
+func (s *Server) countMCP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mcpCalls.Add(1)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Handler returns the root HTTP handler with all routes and auth middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Health (no auth required, registered on outer mux below).
 	// State endpoints.
-	mux.HandleFunc("GET /api/state", s.handleStateList)
-	mux.HandleFunc("GET /api/state/{key}", s.handleStateGet)
-	mux.HandleFunc("PUT /api/state/{key}", s.handleStatePut)
-	mux.HandleFunc("DELETE /api/state/{key}", s.handleStateDelete)
+	mux.HandleFunc("GET /api/state", s.countREST(s.handleStateList))
+	mux.HandleFunc("GET /api/state/{key...}", s.countREST(s.handleStateGet))
+	mux.HandleFunc("PUT /api/state/{key...}", s.countREST(s.handleStatePut))
+	mux.HandleFunc("DELETE /api/state/{key...}", s.countREST(s.handleStateDelete))
 
 	// Specs endpoints.
-	mux.HandleFunc("GET /api/specs/{project}", s.handleSpecsList)
-	mux.HandleFunc("GET /api/specs/{project}/{name}", s.handleSpecsGet)
-	mux.HandleFunc("PUT /api/specs/{project}/{name}", s.handleSpecsPut)
-	mux.HandleFunc("DELETE /api/specs/{project}/{name}", s.handleSpecsDelete)
+	mux.HandleFunc("GET /api/specs/{project}", s.countREST(s.handleSpecsList))
+	mux.HandleFunc("GET /api/specs/{project}/{name}", s.countREST(s.handleSpecsGet))
+	mux.HandleFunc("PUT /api/specs/{project}/{name}", s.countREST(s.handleSpecsPut))
+	mux.HandleFunc("DELETE /api/specs/{project}/{name}", s.countREST(s.handleSpecsDelete))
 
 	// Events endpoints.
-	mux.HandleFunc("POST /api/events/publish", s.handleEventsPublish)
-	mux.HandleFunc("GET /api/events/history", s.handleEventsHistory)
+	mux.HandleFunc("POST /api/events/publish", s.countREST(s.handleEventsPublish))
+	mux.HandleFunc("GET /api/events/history", s.countREST(s.handleEventsHistory))
 	mux.Handle("GET /api/events/subscribe", events.ServeSubscribe(s.eventBus, s.logger))
 
 	// Instance endpoints.
-	mux.HandleFunc("GET /api/instances", s.handleInstancesList)
-	mux.HandleFunc("GET /api/instances/{id}", s.handleInstanceGet)
-	mux.HandleFunc("POST /api/instances/register", s.handleInstanceRegister)
-	mux.HandleFunc("POST /api/instances/{id}/heartbeat", s.handleInstanceHeartbeat)
-	mux.HandleFunc("DELETE /api/instances/{id}", s.handleInstanceDeregister)
+	mux.HandleFunc("GET /api/instances", s.countREST(s.handleInstancesList))
+	mux.HandleFunc("GET /api/instances/{id}", s.countREST(s.handleInstanceGet))
+	mux.HandleFunc("POST /api/instances/register", s.countREST(s.handleInstanceRegister))
+	mux.HandleFunc("POST /api/instances/{id}/heartbeat", s.countREST(s.handleInstanceHeartbeat))
+	mux.HandleFunc("DELETE /api/instances/{id}", s.countREST(s.handleInstanceDeregister))
 
 	// Validation endpoints.
-	mux.HandleFunc("GET /api/validate/{project}/rules", s.handleValidateRulesList)
-	mux.HandleFunc("PUT /api/validate/{project}/rules", s.handleValidateRulesPut)
-	mux.HandleFunc("POST /api/validate/{project}", s.handleValidate)
+	mux.HandleFunc("GET /api/validate/{project}/rules", s.countREST(s.handleValidateRulesList))
+	mux.HandleFunc("PUT /api/validate/{project}/rules", s.countREST(s.handleValidateRulesPut))
+	mux.HandleFunc("POST /api/validate/{project}", s.countREST(s.handleValidate))
+
+	// Contract validation endpoints.
+	mux.HandleFunc("POST /api/contracts/{project}/{name}/validate", s.countREST(s.handleContractValidate))
+	mux.HandleFunc("POST /api/contracts/{project}/{name}/test", s.countREST(s.handleContractTest))
 
 	// Rules management endpoints.
-	mux.HandleFunc("POST /api/rules/propose", s.handleRulesPropose)
-	mux.HandleFunc("POST /api/rules/{project}/{ruleID}/accept", s.handleRulesAccept)
-	mux.HandleFunc("POST /api/rules/{project}/{ruleID}/reject", s.handleRulesReject)
-	mux.HandleFunc("GET /api/rules/export", s.handleRulesExport)
-	mux.HandleFunc("POST /api/rules/import", s.handleRulesImport)
+	mux.HandleFunc("POST /api/rules/propose", s.countREST(s.handleRulesPropose))
+	mux.HandleFunc("POST /api/rules/{project}/{ruleID}/accept", s.countREST(s.handleRulesAccept))
+	mux.HandleFunc("POST /api/rules/{project}/{ruleID}/reject", s.countREST(s.handleRulesReject))
+	mux.HandleFunc("GET /api/rules/export", s.countREST(s.handleRulesExport))
+	mux.HandleFunc("POST /api/rules/import", s.countREST(s.handleRulesImport))
 
-	// Metrics endpoint.
+	// Metrics endpoint (NOT counted — infrastructure, not agent calls).
 	mux.HandleFunc("GET /api/metrics", s.handleMetrics)
 
-	// MCP endpoint (StreamableHTTP).
+	// MCP endpoint (StreamableHTTP) — counted as MCP calls.
 	if s.mcpHandler != nil {
-		mux.Handle("/mcp", s.mcpHandler)
+		mux.Handle("/mcp", s.countMCP(s.mcpHandler))
 	}
 
 	// Outer mux: health is public, everything else goes through auth.
@@ -643,6 +667,114 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- Contract validation handlers ---
+
+func (s *Server) handleContractValidate(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	name := r.PathValue("name")
+
+	// Load the contract from specs.
+	spec, err := s.specReg.Get(r.Context(), project, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "contract not found: "+project+"/"+name)
+		return
+	}
+	if err != nil {
+		s.logger.Error("contract get failed", "project", project, "name", name, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get contract")
+		return
+	}
+
+	contract, err := contracts.Parse(spec.Data)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "stored spec is not a valid contract: "+err.Error())
+		return
+	}
+
+	var req struct {
+		Endpoint  string         `json:"endpoint"`
+		Direction string         `json:"direction"`
+		Payload   map[string]any `json:"payload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Endpoint == "" {
+		writeError(w, http.StatusBadRequest, "endpoint is required")
+		return
+	}
+	if req.Direction == "" {
+		req.Direction = "request"
+	}
+
+	violations := contracts.ValidatePayload(contract, req.Endpoint, req.Direction, req.Payload)
+	if violations == nil {
+		violations = []contracts.Violation{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid":      len(violations) == 0,
+		"violations": violations,
+	})
+}
+
+func (s *Server) handleContractTest(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	name := r.PathValue("name")
+
+	// Load the contract from specs.
+	spec, err := s.specReg.Get(r.Context(), project, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "contract not found: "+project+"/"+name)
+		return
+	}
+	if err != nil {
+		s.logger.Error("contract get failed", "project", project, "name", name, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get contract")
+		return
+	}
+
+	contract, err := contracts.Parse(spec.Data)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "stored spec is not a valid contract: "+err.Error())
+		return
+	}
+
+	var req struct {
+		Endpoint string         `json:"endpoint"`
+		BaseURL  string         `json:"base_url"`
+		TestData map[string]any `json:"test_data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Endpoint == "" {
+		writeError(w, http.StatusBadRequest, "endpoint is required")
+		return
+	}
+	if req.BaseURL == "" {
+		writeError(w, http.StatusBadRequest, "base_url is required")
+		return
+	}
+
+	result, err := contracts.TestEndpoint(contract, req.Endpoint, req.BaseURL, req.TestData)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid":               len(result.RequestViolations) == 0 && len(result.ResponseViolations) == 0 && result.Error == "",
+		"endpoint":            result.Endpoint,
+		"status_code":         result.StatusCode,
+		"request_violations":  result.RequestViolations,
+		"response_violations": result.ResponseViolations,
+		"error":               result.Error,
+	})
+}
+
 // --- Rules management handlers ---
 
 func (s *Server) handleRulesPropose(w http.ResponseWriter, r *http.Request) {
@@ -770,6 +902,10 @@ func (s *Server) handleRulesImport(w http.ResponseWriter, r *http.Request) {
 
 // --- Metrics handler ---
 
+// estimatedTokensPerMCPCall is the estimated tokens consumed per MCP tool call
+// (tool call + response flowing through the LLM context window).
+const estimatedTokensPerMCPCall = 300
+
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	// Gather basic system metrics.
 	stateItems, _ := s.stateStore.List(r.Context())
@@ -781,13 +917,30 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		lastEventID = recentEvents[0].ID
 	}
 
+	// Token tax calculations.
+	mcpCount := s.mcpCalls.Load()
+	restCount := s.restCalls.Load()
+	total := mcpCount + restCount
+	savingsPercent := 0.0
+	if total > 0 {
+		savingsPercent = float64(restCount) / float64(total) * 100
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"uptime":          time.Since(s.startTime).Truncate(time.Second).String(),
-		"state_keys":      len(stateItems),
-		"instances":       len(instanceItems),
-		"last_event_id":   lastEventID,
-		"api_bind":        s.config.Bind,
-		"dashboard_bind":  s.config.DashboardBind,
+		"uptime":         time.Since(s.startTime).Truncate(time.Second).String(),
+		"state_keys":     len(stateItems),
+		"instances":      len(instanceItems),
+		"last_event_id":  lastEventID,
+		"api_bind":       s.config.Bind,
+		"dashboard_bind": s.config.DashboardBind,
+		"token_tax": map[string]any{
+			"mcp_calls":            mcpCount,
+			"rest_calls":           restCount,
+			"total_calls":          total,
+			"mcp_estimated_tokens": mcpCount * estimatedTokensPerMCPCall,
+			"rest_tokens_saved":    restCount * estimatedTokensPerMCPCall,
+			"savings_percent":      savingsPercent,
+		},
 	})
 }
 

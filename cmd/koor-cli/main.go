@@ -44,6 +44,15 @@ func main() {
 	case "rules":
 		cfg := loadConfig()
 		handleRules(cfg, os.Args[2:])
+	case "contract":
+		cfg := loadConfig()
+		handleContract(cfg, os.Args[2:])
+	case "backup":
+		cfg := loadConfig()
+		handleBackup(cfg, os.Args[2:])
+	case "restore":
+		cfg := loadConfig()
+		handleRestore(cfg, os.Args[2:])
 	case "register":
 		cfg := loadConfig()
 		handleRegister(cfg, os.Args[2:])
@@ -80,8 +89,16 @@ Commands:
   events history [--last N] [--topic pattern]   Recent events
   events subscribe [pattern]     Stream events via WebSocket
 
+  contract set <project>/<name> --file <path>   Store a contract
+  contract get <project>/<name>                Get a contract
+  contract validate <project>/<name> --endpoint "POST /api/x" --direction request --payload '{"k":"v"}'
+  contract test <project>/<name> --target http://localhost:8080
+
   rules import --file <path>     Import rules from JSON file
   rules export [--source <s>] [--output <path>]   Export rules as JSON
+
+  backup --output <path>         Backup all data to JSON file
+  restore --file <path>          Restore data from backup file
 
   register <name> [--workspace <path>] [--intent <text>]   Register this agent
   instances list                 List registered instances
@@ -626,6 +643,382 @@ func handleRules(cfg *config, args []string) {
 		fmt.Fprintf(os.Stderr, "unknown rules command: %s\n", args[0])
 		os.Exit(1)
 	}
+}
+
+// --- Contract commands ---
+
+func handleContract(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli contract <set|get|validate|test> [args]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "set":
+		if len(args) < 4 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli contract set <project>/<name> --file <path>")
+			os.Exit(1)
+		}
+		project, name := parseSpecPath(args[1])
+		body, err := readBodyArg(args[2:])
+		if err != nil {
+			fatal(err)
+		}
+
+		// Validate it's a valid contract before storing.
+		var contract map[string]any
+		if err := json.Unmarshal(body, &contract); err != nil {
+			fatal(fmt.Errorf("invalid JSON: %w", err))
+		}
+		if contract["kind"] != "contract" {
+			fatal(fmt.Errorf("JSON must have \"kind\": \"contract\""))
+		}
+
+		resp, err := doRequest(cfg, "PUT", "/api/specs/"+project+"/"+name, strings.NewReader(string(body)))
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "get":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli contract get <project>/<name>")
+			os.Exit(1)
+		}
+		project, name := parseSpecPath(args[1])
+		resp, err := doRequest(cfg, "GET", "/api/specs/"+project+"/"+name, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+
+		data, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 {
+			fmt.Print(string(data))
+			os.Exit(1)
+		}
+
+		// Always pretty-print contracts for readability.
+		var v any
+		if err := json.Unmarshal(data, &v); err == nil {
+			formatted, _ := json.MarshalIndent(v, "", "  ")
+			fmt.Println(string(formatted))
+		} else {
+			fmt.Print(string(data))
+		}
+
+	case "validate":
+		// Parse flags: --endpoint, --direction, --payload, --file
+		endpoint := ""
+		direction := "request"
+		var payload string
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--endpoint":
+				if i+1 < len(args) {
+					endpoint = args[i+1]
+					i++
+				}
+			case "--direction":
+				if i+1 < len(args) {
+					direction = args[i+1]
+					i++
+				}
+			case "--payload":
+				if i+1 < len(args) {
+					payload = args[i+1]
+					i++
+				}
+			case "--file":
+				if i+1 < len(args) {
+					data, err := os.ReadFile(args[i+1])
+					if err != nil {
+						fatal(fmt.Errorf("read payload file: %w", err))
+					}
+					payload = string(data)
+					i++
+				}
+			}
+		}
+		if len(args) < 2 || endpoint == "" {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli contract validate <project>/<name> --endpoint \"POST /api/x\" [--direction request] --payload '{...}'")
+			os.Exit(1)
+		}
+		project, name := parseSpecPath(args[1])
+
+		// Build the validation request.
+		reqBody := map[string]any{
+			"endpoint":  endpoint,
+			"direction": direction,
+		}
+		if payload != "" {
+			var p map[string]any
+			if err := json.Unmarshal([]byte(payload), &p); err != nil {
+				fatal(fmt.Errorf("invalid payload JSON: %w", err))
+			}
+			reqBody["payload"] = p
+		} else {
+			reqBody["payload"] = map[string]any{}
+		}
+
+		reqJSON, _ := json.Marshal(reqBody)
+		resp, err := doRequest(cfg, "POST", "/api/contracts/"+project+"/"+name+"/validate", strings.NewReader(string(reqJSON)))
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+
+		data, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 {
+			fmt.Print(string(data))
+			os.Exit(1)
+		}
+
+		// Parse and print results.
+		var result struct {
+			Valid      bool `json:"valid"`
+			Violations []struct {
+				Path    string `json:"path"`
+				Message string `json:"message"`
+			} `json:"violations"`
+		}
+		json.Unmarshal(data, &result)
+
+		if result.Valid {
+			fmt.Printf("PASS  %s %s\n", direction, endpoint)
+		} else {
+			fmt.Printf("FAIL  %s %s\n", direction, endpoint)
+			for _, v := range result.Violations {
+				fmt.Printf("  - [%s] %s\n", v.Path, v.Message)
+			}
+			os.Exit(1)
+		}
+
+	case "test":
+		// Parse flags: --target
+		target := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--target" && i+1 < len(args) {
+				target = args[i+1]
+				i++
+			}
+		}
+		if len(args) < 2 || target == "" {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli contract test <project>/<name> --target http://localhost:8080")
+			os.Exit(1)
+		}
+		project, name := parseSpecPath(args[1])
+
+		// First, fetch the contract to get the list of endpoints.
+		resp, err := doRequest(cfg, "GET", "/api/specs/"+project+"/"+name, nil)
+		if err != nil {
+			fatal(err)
+		}
+		contractData, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			fmt.Print(string(contractData))
+			os.Exit(1)
+		}
+
+		var contract struct {
+			Endpoints map[string]json.RawMessage `json:"endpoints"`
+		}
+		if err := json.Unmarshal(contractData, &contract); err != nil {
+			fatal(fmt.Errorf("parse contract: %w", err))
+		}
+
+		pass := 0
+		fail := 0
+		for ep := range contract.Endpoints {
+			reqBody, _ := json.Marshal(map[string]any{
+				"endpoint": ep,
+				"base_url": target,
+			})
+			resp, err := doRequest(cfg, "POST", "/api/contracts/"+project+"/"+name+"/test", strings.NewReader(string(reqBody)))
+			if err != nil {
+				fmt.Printf("FAIL  %s (request error: %v)\n", ep, err)
+				fail++
+				continue
+			}
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
+			var result struct {
+				Valid              bool `json:"valid"`
+				StatusCode         int  `json:"status_code"`
+				Error              string `json:"error"`
+				RequestViolations  []struct {
+					Path    string `json:"path"`
+					Message string `json:"message"`
+				} `json:"request_violations"`
+				ResponseViolations []struct {
+					Path    string `json:"path"`
+					Message string `json:"message"`
+				} `json:"response_violations"`
+			}
+			json.Unmarshal(data, &result)
+
+			if result.Valid {
+				fmt.Printf("PASS  %s (status: %d)\n", ep, result.StatusCode)
+				pass++
+			} else {
+				fmt.Printf("FAIL  %s (status: %d)\n", ep, result.StatusCode)
+				if result.Error != "" {
+					fmt.Printf("  - error: %s\n", result.Error)
+				}
+				for _, v := range result.RequestViolations {
+					fmt.Printf("  - [req] [%s] %s\n", v.Path, v.Message)
+				}
+				for _, v := range result.ResponseViolations {
+					fmt.Printf("  - [resp] [%s] %s\n", v.Path, v.Message)
+				}
+				fail++
+			}
+		}
+
+		total := pass + fail
+		fmt.Printf("\n%d/%d endpoints PASS", pass, total)
+		if fail > 0 {
+			fmt.Printf(", %d FAIL", fail)
+		}
+		fmt.Println()
+		if fail > 0 {
+			os.Exit(1)
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown contract command: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+// --- Backup/Restore commands ---
+
+func handleBackup(cfg *config, args []string) {
+	output := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--output" && i+1 < len(args) {
+			output = args[i+1]
+			i++
+		}
+	}
+	if output == "" {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli backup --output <path>")
+		os.Exit(1)
+	}
+
+	backup := map[string]any{}
+
+	// Backup state.
+	resp, err := doRequest(cfg, "GET", "/api/state", nil)
+	if err != nil {
+		fatal(fmt.Errorf("backup state list: %w", err))
+	}
+	stateListData, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var stateItems []struct {
+		Key string `json:"key"`
+	}
+	json.Unmarshal(stateListData, &stateItems)
+
+	stateBackup := map[string]json.RawMessage{}
+	for _, item := range stateItems {
+		resp, err := doRequest(cfg, "GET", "/api/state/"+item.Key, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not backup state key %s: %v\n", item.Key, err)
+			continue
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		stateBackup[item.Key] = json.RawMessage(data)
+	}
+	backup["state"] = stateBackup
+
+	// Backup rules.
+	resp, err = doRequest(cfg, "GET", "/api/rules/export?source=local,learned,external,user-rules", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not backup rules: %v\n", err)
+	} else {
+		rulesData, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var rules []json.RawMessage
+		json.Unmarshal(rulesData, &rules)
+		backup["rules"] = rules
+	}
+
+	data, _ := json.MarshalIndent(backup, "", "  ")
+	if err := os.WriteFile(output, data, 0o644); err != nil {
+		fatal(fmt.Errorf("write backup file: %w", err))
+	}
+	fmt.Printf("backup saved to %s\n", output)
+	fmt.Printf("  state keys: %d\n", len(stateBackup))
+	if rules, ok := backup["rules"].([]json.RawMessage); ok {
+		fmt.Printf("  rules: %d\n", len(rules))
+	}
+}
+
+func handleRestore(cfg *config, args []string) {
+	filePath := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--file" && i+1 < len(args) {
+			filePath = args[i+1]
+			i++
+		}
+	}
+	if filePath == "" {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli restore --file <path>")
+		os.Exit(1)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(fmt.Errorf("read backup file: %w", err))
+	}
+
+	var backup struct {
+		State map[string]json.RawMessage `json:"state"`
+		Rules []json.RawMessage          `json:"rules"`
+	}
+	if err := json.Unmarshal(data, &backup); err != nil {
+		fatal(fmt.Errorf("invalid backup JSON: %w", err))
+	}
+
+	// Restore state.
+	stateCount := 0
+	for key, val := range backup.State {
+		resp, err := doRequest(cfg, "PUT", "/api/state/"+key, strings.NewReader(string(val)))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not restore state key %s: %v\n", key, err)
+			continue
+		}
+		resp.Body.Close()
+		stateCount++
+	}
+
+	// Restore rules.
+	rulesCount := 0
+	if len(backup.Rules) > 0 {
+		rulesJSON, _ := json.Marshal(backup.Rules)
+		resp, err := doRequest(cfg, "POST", "/api/rules/import", strings.NewReader(string(rulesJSON)))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not restore rules: %v\n", err)
+		} else {
+			respData, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			var result struct {
+				Imported int `json:"imported"`
+			}
+			json.Unmarshal(respData, &result)
+			rulesCount = result.Imported
+		}
+	}
+
+	fmt.Printf("restore complete from %s\n", filePath)
+	fmt.Printf("  state keys: %d\n", stateCount)
+	fmt.Printf("  rules: %d\n", rulesCount)
 }
 
 // --- HTTP client helpers ---

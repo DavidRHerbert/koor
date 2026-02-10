@@ -372,6 +372,77 @@ main {
   border-top: 1px solid #21262d;
 }
 
+/* --- Token Tax card --- */
+
+.token-tax-card {
+  grid-column: 1 / -1;
+  border-color: #238636;
+}
+
+.tt-big-number {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #3fb950;
+  margin-bottom: 0.75rem;
+}
+
+.tt-bar-container {
+  position: relative;
+  height: 24px;
+  background: #21262d;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.tt-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #238636, #3fb950);
+  border-radius: 12px;
+  transition: width 0.5s ease;
+}
+
+.tt-bar-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #e1e4e8;
+}
+
+.tt-stats {
+  display: flex;
+  gap: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.tt-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.tt-stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #e1e4e8;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.tt-stat-label {
+  font-size: 0.75rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tt-explainer {
+  font-size: 0.8rem;
+  color: #484f58;
+  font-style: italic;
+}
+
 footer {
   text-align: center;
   padding: 1rem;

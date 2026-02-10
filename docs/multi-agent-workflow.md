@@ -1,10 +1,10 @@
 # Multi-Agent Workflow
 
-How to coordinate multiple LLM coding agents across VS Code instances using Koor.
+How to coordinate multiple LLM coding agents across IDE instances using Koor.
 
 ## The Pattern
 
-Three VS Code instances, each running Claude Code (or any MCP-capable LLM), coordinated through Koor:
+Multiple IDE instances — Claude Code, Cursor, or any MCP-capable LLM — coordinated through Koor:
 
 - **Controller** — Orchestrator. Holds the master plan as local files. Assigns tasks, approves requests, tracks progress.
 - **Frontend** — Builds the UI. Reads tasks from Koor, publishes completion events, requests changes through Koor.
@@ -48,76 +48,80 @@ The user is the **approver and director**, not the messenger. Agents communicate
 koor-server --bind :9800 --dashboard :9847
 ```
 
-### 2. Create the Controller workspace
+### 2. Run the wizard
 
-The Controller is the only workspace you set up manually:
+`koor-wizard` scaffolds the entire project interactively — Controller + all agent workspaces:
+
+```bash
+koor-wizard
+```
+
+The wizard will ask for:
+- Project name (e.g. `Truck-Wash`)
+- Koor server URL
+- Number of agents
+- Each agent's name and stack (Go + templ + HTMX, Go REST API, React, Flutter, C, Generic)
+
+It generates everything:
 
 ```
 truck-wash-controller/
-├── .claude/mcp.json             # Koor MCP connection
-├── AGENTS.md                    # Controller role instructions
+├── .claude/mcp.json             # Claude Code MCP connection
+├── .cursor/mcp.json             # Cursor MCP connection
+├── CLAUDE.md                    # Controller role instructions (Claude Code)
+├── .cursorrules                 # Controller role instructions (Cursor)
 ├── plan/
-│   ├── overview.md              # Master plan
-│   ├── api-contract.md          # API contract (evolves)
+│   ├── overview.md              # Master plan (edit this!)
 │   └── decisions/               # Decision log (grows)
+├── agents/
 └── status/
-    ├── backend.md               # Backend progress
-    └── frontend.md              # Frontend progress
+
+truck-wash-frontend/
+├── .claude/mcp.json
+├── .cursor/mcp.json
+├── CLAUDE.md
+└── .cursorrules                 # Includes sandbox rules + stack instructions
+
+truck-wash-backend/
+├── .claude/mcp.json
+├── .cursor/mcp.json
+├── CLAUDE.md
+└── .cursorrules
 ```
+
+Each agent's instruction files include strict **sandbox rules** that keep the agent in its own workspace directory, enforce all cross-agent communication through Koor, and prevent copy-paste relay between windows.
 
 The plan is **plain files** — editable, visible, version-controlled. Not stored in Koor.
 
-### 3. MCP configuration
+### 3. IDE support
 
-Every workspace needs a `.claude/mcp.json` (or equivalent for your IDE):
+The wizard generates config for both Claude Code and Cursor:
 
-```json
-{
-  "mcpServers": {
-    "koor": {
-      "url": "http://localhost:9800/mcp"
-    }
-  }
-}
-```
+| IDE | Rules file | MCP config |
+|-----|-----------|------------|
+| Claude Code | `CLAUDE.md` | `.claude/mcp.json` |
+| Cursor | `.cursorrules` | `.cursor/mcp.json` |
 
-This gives agents access to MCP tools: `register_instance`, `discover_instances`, `set_intent`, `get_endpoints`, `propose_rule`.
+You can mix IDEs across workspaces — e.g. Controller in Claude Code, frontend agent in Cursor (great for DOM work), backend in Claude Code. Multiple IDEs can even open the same workspace simultaneously.
+
+MCP tools available in all IDEs: `register_instance`, `discover_instances`, `set_intent`, `get_endpoints`, `propose_rule`.
 
 For data operations (reading tasks, publishing events), agents use `koor-cli` via Bash — this is by design, keeping the LLM context window clean.
 
-### 4. Controller generates agent configs
+### 4. Open workspaces and start
 
-Tell the Controller about your agents:
+For each workspace:
 
-```
-User: "I need a Frontend (goth stack) and Backend (go-api stack). Setup agents."
+1. Open the directory in your IDE
+2. Say "next"
 
-Controller:
-- Reads plan/overview.md
-- Generates agents/frontend-AGENTS.md and agents/backend-AGENTS.md
-- Generates agents/mcp.json
-- Writes initial tasks to Koor state
-- Tells user: "Copy these files to each workspace. Open VS Code, say 'next'."
-```
-
-The Controller generates tailored AGENTS.md files for each agent — you don't configure them manually.
-
-### 5. Set up each agent workspace
-
-For each agent:
-
-1. Create the directory (e.g. `truck-wash-frontend/`)
-2. Copy the AGENTS.md that Controller generated
-3. Copy `.claude/mcp.json`
-4. Open in VS Code, say "next"
-
-The agent registers with Koor, reads its task, and starts working.
+The agent registers with Koor, reads its task, and starts working. Start with the Controller to assign initial tasks ("setup agents"), then open each agent workspace.
 
 ## The User's Vocabulary
 
 | Word | Where | What happens |
 |------|-------|-------------|
-| **"setup agents"** | Controller | Generate AGENTS.md + MCP config for each agent |
+| **"setup agents"** | Controller | Generate CLAUDE.md + MCP config for each agent |
 | **"next"** | Any agent | Agent checks Koor for its task/events and proceeds |
 | **"yes"** | Controller | Approve a pending request |
 | **"no"** | Controller | Reject a pending request |
@@ -201,11 +205,11 @@ Backend:
 
 **User approves, never relays.** Agents publish to Koor; other agents read from Koor. The user says "yes/no" at decision points.
 
-**Controller generates everything.** Only the Controller needs manual setup. It generates AGENTS.md files for all other agents.
+**Controller generates everything.** Only the Controller needs manual setup. It generates CLAUDE.md files for all other agents.
 
 **MCP for discovery, REST/CLI for data.** MCP tools register and discover. `koor-cli` reads state and publishes events — keeping the LLM context window clean.
 
-## AGENTS.md Reference
+## CLAUDE.md Reference
 
 ### Controller
 

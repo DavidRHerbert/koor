@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -615,6 +616,135 @@ func TestRulesImportEmpty(t *testing.T) {
 	}
 }
 
+// --- Contract validation integration tests ---
+
+func TestContractValidatePass(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Store a contract as a spec.
+	contract := `{"kind":"contract","version":1,"endpoints":{"POST /api/trucks":{"request":{"plate":{"type":"string","required":true},"company":{"type":"string","required":true},"type":{"type":"string","required":true,"enum":["semi","tanker","flatbed"]}},"response_status":201}}}`
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/specs/Truck-Wash/api-contract", strings.NewReader(contract))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("PUT spec: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Validate a correct payload.
+	vBody := `{"endpoint":"POST /api/trucks","direction":"request","payload":{"plate":"ABC-123","company":"Acme","type":"semi"}}`
+	resp, _ = http.Post(ts.URL+"/api/contracts/Truck-Wash/api-contract/validate", "application/json", strings.NewReader(vBody))
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("validate: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"valid":true`) {
+		t.Errorf("expected valid:true, got: %s", body)
+	}
+}
+
+func TestContractValidateFail(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Store a contract.
+	contract := `{"kind":"contract","version":1,"endpoints":{"POST /api/trucks":{"request":{"plate":{"type":"string","required":true},"company":{"type":"string","required":true},"type":{"type":"string","required":true}}}}}`
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/specs/Truck-Wash/api-contract", strings.NewReader(contract))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Validate with wrong field names (the exact Truck-Wash bug).
+	vBody := `{"endpoint":"POST /api/trucks","direction":"request","payload":{"plate_number":"ABC-123","company":"Acme","truck_type":"semi"}}`
+	resp, _ = http.Post(ts.URL+"/api/contracts/Truck-Wash/api-contract/validate", "application/json", strings.NewReader(vBody))
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"valid":false`) {
+		t.Errorf("expected valid:false, got: %s", body)
+	}
+	if !strings.Contains(string(body), "plate_number") {
+		t.Errorf("should mention plate_number: %s", body)
+	}
+	if !strings.Contains(string(body), "truck_type") {
+		t.Errorf("should mention truck_type: %s", body)
+	}
+}
+
+func TestContractValidateNotFound(t *testing.T) {
+	ts := testServer(t, "")
+	resp, _ := http.Post(ts.URL+"/api/contracts/NoProj/no-contract/validate", "application/json",
+		strings.NewReader(`{"endpoint":"GET /test"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestContractTestLive(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Create a mock backend that returns a JSON response.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "1", "plate": "ABC"},
+			{"id": "2", "plate": "DEF"},
+		})
+	}))
+	defer backend.Close()
+
+	// Store a contract.
+	contract := `{"kind":"contract","version":1,"endpoints":{"GET /api/trucks":{"response_status":200,"response_array":{"id":{"type":"string"},"plate":{"type":"string"}}}}}`
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/specs/TW/api", strings.NewReader(contract))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Test the live endpoint.
+	testBody := fmt.Sprintf(`{"endpoint":"GET /api/trucks","base_url":"%s"}`, backend.URL)
+	resp, _ = http.Post(ts.URL+"/api/contracts/TW/api/test", "application/json", strings.NewReader(testBody))
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("test: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"valid":true`) {
+		t.Errorf("expected valid:true, got: %s", body)
+	}
+	if !strings.Contains(string(body), `"status_code":200`) {
+		t.Errorf("expected status_code 200: %s", body)
+	}
+}
+
+func TestContractTestLiveFail(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Backend returns wrong field names.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":           "1",
+			"plate_number": "ABC", // wrong — contract says "plate"
+		})
+	}))
+	defer backend.Close()
+
+	contract := `{"kind":"contract","version":1,"endpoints":{"POST /api/trucks":{"request":{"plate":{"type":"string","required":true}},"response_status":201,"response":{"id":{"type":"string","required":true},"plate":{"type":"string"}}}}}`
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/specs/TW/api", strings.NewReader(contract))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	testBody := fmt.Sprintf(`{"endpoint":"POST /api/trucks","base_url":"%s","test_data":{"plate":"ABC"}}`, backend.URL)
+	resp, _ = http.Post(ts.URL+"/api/contracts/TW/api/test", "application/json", strings.NewReader(testBody))
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"valid":false`) {
+		t.Errorf("expected valid:false for wrong response fields: %s", body)
+	}
+	if !strings.Contains(string(body), "plate_number") {
+		t.Errorf("should mention unexpected plate_number in response: %s", body)
+	}
+}
+
 func TestMetrics(t *testing.T) {
 	ts := testServer(t, "")
 	resp, _ := http.Get(ts.URL + "/api/metrics")
@@ -628,5 +758,50 @@ func TestMetrics(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "state_keys") {
 		t.Errorf("metrics should contain state_keys: %s", body)
+	}
+	if !strings.Contains(string(body), "token_tax") {
+		t.Errorf("metrics should contain token_tax: %s", body)
+	}
+}
+
+func TestTokenTaxCounting(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Make some REST calls.
+	for i := 0; i < 3; i++ {
+		req, _ := http.NewRequest("PUT", ts.URL+"/api/state/test-key", strings.NewReader(`{"x":1}`))
+		resp, _ := http.DefaultClient.Do(req)
+		resp.Body.Close()
+	}
+
+	// Check metrics reflect the REST calls.
+	resp, _ := http.Get(ts.URL + "/api/metrics")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var metrics struct {
+		TokenTax struct {
+			MCPCalls        int64   `json:"mcp_calls"`
+			RESTCalls       int64   `json:"rest_calls"`
+			TotalCalls      int64   `json:"total_calls"`
+			RESTTokensSaved int64   `json:"rest_tokens_saved"`
+			SavingsPercent  float64 `json:"savings_percent"`
+		} `json:"token_tax"`
+	}
+	if err := json.Unmarshal(body, &metrics); err != nil {
+		t.Fatalf("unmarshal metrics: %v", err)
+	}
+
+	if metrics.TokenTax.RESTCalls < 3 {
+		t.Errorf("expected at least 3 REST calls, got %d", metrics.TokenTax.RESTCalls)
+	}
+	if metrics.TokenTax.MCPCalls != 0 {
+		t.Errorf("expected 0 MCP calls, got %d", metrics.TokenTax.MCPCalls)
+	}
+	if metrics.TokenTax.RESTTokensSaved != metrics.TokenTax.RESTCalls*300 {
+		t.Errorf("tokens saved mismatch: %d vs %d*300", metrics.TokenTax.RESTTokensSaved, metrics.TokenTax.RESTCalls)
+	}
+	if metrics.TokenTax.SavingsPercent != 100.0 {
+		t.Errorf("expected 100%% savings (no MCP calls), got %.1f%%", metrics.TokenTax.SavingsPercent)
 	}
 }

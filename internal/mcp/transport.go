@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/DavidRHerbert/koor/internal/contracts"
 	"github.com/DavidRHerbert/koor/internal/instances"
 	"github.com/DavidRHerbert/koor/internal/server/serverconfig"
 	"github.com/DavidRHerbert/koor/internal/specs"
@@ -91,6 +92,19 @@ func New(registry *instances.Registry, specReg *specs.Registry, endpoints server
 			mcplib.WithString("context", mcplib.Description("Description of the issue that led to this rule")),
 		),
 		t.handleProposeRule,
+	)
+
+	// Tool 6: validate_contract
+	srv.AddTool(
+		mcplib.NewTool("validate_contract",
+			mcplib.WithDescription("Validate a JSON payload against a stored API contract. Use this to check that your request/response matches the agreed contract before sending."),
+			mcplib.WithString("project", mcplib.Required(), mcplib.Description("Project name (e.g. 'Truck-Wash')")),
+			mcplib.WithString("contract", mcplib.Required(), mcplib.Description("Contract spec name (e.g. 'api-contract')")),
+			mcplib.WithString("endpoint", mcplib.Required(), mcplib.Description("Endpoint key (e.g. 'POST /api/trucks')")),
+			mcplib.WithString("direction", mcplib.Required(), mcplib.Description("'request', 'response', 'query', or 'error'")),
+			mcplib.WithString("payload", mcplib.Required(), mcplib.Description("JSON payload to validate (as a string)")),
+		),
+		t.handleValidateContract,
 	)
 
 	streamable := mcpserver.NewStreamableHTTPServer(srv)
@@ -194,9 +208,9 @@ func (t *Transport) handleGetEndpoints(ctx context.Context, req mcplib.CallToolR
 		"api_base": t.config.APIBase,
 		"endpoints": map[string]string{
 			"state_list":     "GET /api/state",
-			"state_get":      "GET /api/state/{key}",
-			"state_put":      "PUT /api/state/{key}",
-			"state_delete":   "DELETE /api/state/{key}",
+			"state_get":      "GET /api/state/{key...}",
+			"state_put":      "PUT /api/state/{key...}",
+			"state_delete":   "DELETE /api/state/{key...}",
 			"specs_list":     "GET /api/specs/{project}",
 			"specs_get":      "GET /api/specs/{project}/{name}",
 			"specs_put":      "PUT /api/specs/{project}/{name}",
@@ -256,6 +270,53 @@ func (t *Transport) handleProposeRule(ctx context.Context, req mcplib.CallToolRe
 		"rule_id": ruleID,
 		"status":  "proposed",
 		"message": "Rule proposed successfully. It will be reviewed by the user before activation.",
+	}, "", "  ")
+
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (t *Transport) handleValidateContract(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	project := getArg(req, "project")
+	contractName := getArg(req, "contract")
+	endpoint := getArg(req, "endpoint")
+	direction := getArg(req, "direction")
+	payloadStr := getArg(req, "payload")
+
+	if project == "" || contractName == "" || endpoint == "" || direction == "" {
+		return mcplib.NewToolResultError("project, contract, endpoint, and direction are all required"), nil
+	}
+
+	// Load contract from specs.
+	spec, err := t.specReg.Get(ctx, project, contractName)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("contract not found: %s/%s (%v)", project, contractName, err)), nil
+	}
+
+	contract, err := contracts.Parse(spec.Data)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("stored spec is not a valid contract: %v", err)), nil
+	}
+
+	// Parse the payload JSON.
+	var payload map[string]any
+	if payloadStr != "" {
+		if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("invalid payload JSON: %v", err)), nil
+		}
+	} else {
+		payload = map[string]any{}
+	}
+
+	violations := contracts.ValidatePayload(contract, endpoint, direction, payload)
+	if violations == nil {
+		violations = []contracts.Violation{}
+	}
+
+	data, _ := json.MarshalIndent(map[string]any{
+		"valid":      len(violations) == 0,
+		"endpoint":   endpoint,
+		"direction":  direction,
+		"violations": violations,
 	}, "", "  ")
 
 	return mcplib.NewToolResultText(string(data)), nil
