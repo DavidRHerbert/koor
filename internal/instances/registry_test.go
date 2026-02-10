@@ -23,7 +23,7 @@ func TestRegisterAndGet(t *testing.T) {
 	reg := testRegistry(t)
 	ctx := context.Background()
 
-	inst, err := reg.Register(ctx, "claude-frontend", "/workspace/proj", "building UI")
+	inst, err := reg.Register(ctx, "claude-frontend", "/workspace/proj", "building UI", "goth")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +36,9 @@ func TestRegisterAndGet(t *testing.T) {
 	if inst.Name != "claude-frontend" {
 		t.Errorf("expected name claude-frontend, got %s", inst.Name)
 	}
+	if inst.Stack != "goth" {
+		t.Errorf("expected stack goth, got %s", inst.Stack)
+	}
 
 	got, err := reg.Get(ctx, inst.ID)
 	if err != nil {
@@ -44,14 +47,17 @@ func TestRegisterAndGet(t *testing.T) {
 	if got.Name != inst.Name {
 		t.Errorf("expected %s, got %s", inst.Name, got.Name)
 	}
+	if got.Stack != "goth" {
+		t.Errorf("expected stack goth, got %s", got.Stack)
+	}
 }
 
 func TestList(t *testing.T) {
 	reg := testRegistry(t)
 	ctx := context.Background()
 
-	reg.Register(ctx, "agent-a", "", "")
-	reg.Register(ctx, "agent-b", "", "")
+	reg.Register(ctx, "agent-a", "", "", "")
+	reg.Register(ctx, "agent-b", "", "", "")
 
 	items, err := reg.List(ctx)
 	if err != nil {
@@ -66,12 +72,12 @@ func TestDiscover(t *testing.T) {
 	reg := testRegistry(t)
 	ctx := context.Background()
 
-	reg.Register(ctx, "claude", "/ws/alpha", "")
-	reg.Register(ctx, "claude", "/ws/beta", "")
-	reg.Register(ctx, "cursor", "/ws/alpha", "")
+	reg.Register(ctx, "claude", "/ws/alpha", "", "")
+	reg.Register(ctx, "claude", "/ws/beta", "", "")
+	reg.Register(ctx, "cursor", "/ws/alpha", "", "")
 
 	// Filter by name.
-	items, err := reg.Discover(ctx, "claude", "")
+	items, err := reg.Discover(ctx, "claude", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +86,7 @@ func TestDiscover(t *testing.T) {
 	}
 
 	// Filter by workspace.
-	items, err = reg.Discover(ctx, "", "/ws/alpha")
+	items, err = reg.Discover(ctx, "", "/ws/alpha", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +95,7 @@ func TestDiscover(t *testing.T) {
 	}
 
 	// Filter by both.
-	items, err = reg.Discover(ctx, "cursor", "/ws/alpha")
+	items, err = reg.Discover(ctx, "cursor", "/ws/alpha", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,11 +104,52 @@ func TestDiscover(t *testing.T) {
 	}
 }
 
+func TestDiscoverByStack(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	reg.Register(ctx, "scanner-a", "/ws/proj", "", "goth")
+	reg.Register(ctx, "scanner-b", "/ws/proj", "", "goth")
+	reg.Register(ctx, "scanner-c", "/ws/proj", "", "react")
+
+	// Filter by stack.
+	items, err := reg.Discover(ctx, "", "", "goth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 goth instances, got %d", len(items))
+	}
+	for _, item := range items {
+		if item.Stack != "goth" {
+			t.Errorf("expected stack goth, got %s", item.Stack)
+		}
+	}
+
+	// Filter by stack + name.
+	items, err = reg.Discover(ctx, "scanner-c", "", "react")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 react instance, got %d", len(items))
+	}
+
+	// No matches.
+	items, err = reg.Discover(ctx, "", "", "vue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected 0 vue instances, got %d", len(items))
+	}
+}
+
 func TestSetIntent(t *testing.T) {
 	reg := testRegistry(t)
 	ctx := context.Background()
 
-	inst, _ := reg.Register(ctx, "agent", "", "initial task")
+	inst, _ := reg.Register(ctx, "agent", "", "initial task", "")
 	err := reg.SetIntent(ctx, inst.ID, "new task")
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +175,7 @@ func TestDeregister(t *testing.T) {
 	reg := testRegistry(t)
 	ctx := context.Background()
 
-	inst, _ := reg.Register(ctx, "temp", "", "")
+	inst, _ := reg.Register(ctx, "temp", "", "", "")
 	err := reg.Deregister(ctx, inst.ID)
 	if err != nil {
 		t.Fatal(err)

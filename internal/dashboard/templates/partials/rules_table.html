@@ -1,0 +1,33 @@
+<table class="rules-data-table">
+  <thead>
+    <tr>
+      <th>Rule ID</th>
+      <th>Project</th>
+      <th>Stack</th>
+      <th>Severity</th>
+      <th>Source</th>
+      <th>Pattern</th>
+      <th>Message</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .}}
+    <tr id="rule-row-{{.Project}}-{{.RuleID}}">
+      <td><code>{{.RuleID}}</code></td>
+      <td>{{.Project}}</td>
+      <td>{{if .Stack}}<span class="badge badge-info">{{.Stack}}</span>{{else}}<span class="empty">any</span>{{end}}</td>
+      <td><span class="badge {{if eq .Severity "error"}}badge-error{{else}}badge-warning{{end}}">{{.Severity}}</span></td>
+      <td><span class="badge {{if eq .Source "local"}}badge-ok{{else if eq .Source "learned"}}badge-warning{{else}}badge-info{{end}}">{{.Source}}</span></td>
+      <td><code class="pattern-cell">{{.Pattern}}</code></td>
+      <td>{{.Message}}</td>
+      <td class="actions-cell">
+        <button hx-get="/rules/form?project={{.Project}}&amp;rule_id={{.RuleID}}" hx-target="#rule-modal" hx-swap="innerHTML" class="btn btn-sm">Edit</button>
+        <button hx-delete="/rules/{{.Project}}/{{.RuleID}}" hx-target="#rule-row-{{.Project}}-{{.RuleID}}" hx-swap="outerHTML" hx-confirm="Delete rule {{.RuleID}}?" class="btn btn-danger btn-sm">Del</button>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="8" class="empty">No rules found</td></tr>
+    {{end}}
+  </tbody>
+</table>

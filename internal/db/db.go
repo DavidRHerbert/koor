@@ -90,21 +90,43 @@ func migrate(db *sql.DB) error {
 			name          TEXT NOT NULL,
 			workspace     TEXT NOT NULL DEFAULT '',
 			intent        TEXT NOT NULL DEFAULT '',
+			stack         TEXT NOT NULL DEFAULT '',
 			token         TEXT NOT NULL DEFAULT '',
 			registered_at DATETIME NOT NULL DEFAULT (datetime('now')),
 			last_seen     DATETIME NOT NULL DEFAULT (datetime('now'))
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS validation_rules (
-			project    TEXT NOT NULL,
-			rule_id    TEXT NOT NULL,
-			severity   TEXT NOT NULL DEFAULT 'error',
-			match_type TEXT NOT NULL DEFAULT 'regex',
-			pattern    TEXT NOT NULL,
-			message    TEXT NOT NULL DEFAULT '',
-			applies_to TEXT NOT NULL DEFAULT '["*"]',
+			project     TEXT NOT NULL,
+			rule_id     TEXT NOT NULL,
+			severity    TEXT NOT NULL DEFAULT 'error',
+			match_type  TEXT NOT NULL DEFAULT 'regex',
+			pattern     TEXT NOT NULL,
+			message     TEXT NOT NULL DEFAULT '',
+			stack       TEXT NOT NULL DEFAULT '',
+			applies_to  TEXT NOT NULL DEFAULT '["*"]',
+			source      TEXT NOT NULL DEFAULT 'local',
+			status      TEXT NOT NULL DEFAULT 'accepted',
+			proposed_by TEXT NOT NULL DEFAULT '',
+			context     TEXT NOT NULL DEFAULT '',
+			created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
 			PRIMARY KEY (project, rule_id)
 		)`,
+	}
+
+	// Migrate existing databases: add columns that may not exist yet.
+	// Errors are ignored because ALTER TABLE fails if the column already exists.
+	alterMigrations := []string{
+		`ALTER TABLE instances ADD COLUMN stack TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE validation_rules ADD COLUMN stack TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE validation_rules ADD COLUMN source TEXT NOT NULL DEFAULT 'local'`,
+		`ALTER TABLE validation_rules ADD COLUMN status TEXT NOT NULL DEFAULT 'accepted'`,
+		`ALTER TABLE validation_rules ADD COLUMN proposed_by TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE validation_rules ADD COLUMN context TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE validation_rules ADD COLUMN created_at DATETIME NOT NULL DEFAULT (datetime('now'))`,
+	}
+	for _, ddl := range alterMigrations {
+		db.Exec(ddl) // ignore error — column may already exist
 	}
 
 	// Create indexes for common queries.
@@ -112,6 +134,7 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_events_topic ON events(topic)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_instances_last_seen ON instances(last_seen)`,
+		`CREATE INDEX IF NOT EXISTS idx_instances_stack ON instances(stack)`,
 	}
 
 	for _, ddl := range tables {

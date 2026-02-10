@@ -373,7 +373,23 @@ Agent instance registration and discovery. Each instance gets a unique ID and to
 
 ### GET /api/instances
 
-List all registered instances.
+List all registered instances. Supports optional query parameter filters.
+
+**Query Parameters**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | No | Filter by agent name |
+| `workspace` | No | Filter by workspace |
+| `stack` | No | Filter by technology stack (e.g. `goth`, `react`) |
+
+**Examples**
+
+```
+GET /api/instances
+GET /api/instances?stack=goth
+GET /api/instances?name=claude&workspace=/projects/frontend
+```
 
 **Response** `200`
 
@@ -384,6 +400,7 @@ List all registered instances.
     "name": "claude-frontend",
     "workspace": "/projects/frontend",
     "intent": "implementing dark mode",
+    "stack": "goth",
     "registered_at": "2026-02-09T12:00:00Z",
     "last_seen": "2026-02-09T14:30:00Z"
   }
@@ -404,6 +421,7 @@ Get a single instance by ID. Token is not included in the response.
   "name": "claude-frontend",
   "workspace": "/projects/frontend",
   "intent": "implementing dark mode",
+  "stack": "goth",
   "registered_at": "2026-02-09T12:00:00Z",
   "last_seen": "2026-02-09T14:30:00Z"
 }
@@ -425,7 +443,8 @@ Register a new agent instance. Returns the instance with its token (save this �
 {
   "name": "claude-frontend",
   "workspace": "/projects/frontend",
-  "intent": "implementing dark mode"
+  "intent": "implementing dark mode",
+  "stack": "goth"
 }
 ```
 
@@ -434,6 +453,7 @@ Register a new agent instance. Returns the instance with its token (save this �
 | `name` | Yes | Agent name (e.g. `claude-frontend`) |
 | `workspace` | No | Workspace path or identifier |
 | `intent` | No | Current task description |
+| `stack` | No | Technology stack identifier (e.g. `goth`, `react`) |
 
 **Response** `200`
 
@@ -443,6 +463,7 @@ Register a new agent instance. Returns the instance with its token (save this �
   "name": "claude-frontend",
   "workspace": "/projects/frontend",
   "intent": "implementing dark mode",
+  "stack": "goth",
   "token": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "registered_at": "2026-02-09T14:30:00Z",
   "last_seen": "2026-02-09T14:30:00Z"
@@ -493,11 +514,24 @@ Deregister an instance.
 
 ## Validation
 
-Rule-based content validation. Rules are stored per-project and can check for forbidden patterns (regex), required patterns (missing), or custom checks.
+Rule-based content validation. Rules are stored per-project and can check for forbidden patterns (regex), required patterns (missing), or custom checks. Rules can be scoped to a technology stack (e.g. `goth`, `react`) so that stack-specific rules only fire when validating content for that stack.
 
 ### GET /api/validate/{project}/rules
 
-List all validation rules for a project.
+List all validation rules for a project. Supports optional stack filter.
+
+**Query Parameters**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `stack` | No | Filter rules by technology stack |
+
+**Examples**
+
+```
+GET /api/validate/w2c-forms/rules
+GET /api/validate/w2c-forms/rules?stack=goth
+```
 
 **Response** `200`
 
@@ -512,7 +546,8 @@ List all validation rules for a project.
       "match_type": "regex",
       "pattern": "style\\s*=",
       "message": "Inline styles are not allowed",
-      "applies_to": ["*.html", "*.templ"]
+      "applies_to": ["*.html", "*.templ"],
+      "stack": "goth"
     }
   ]
 }
@@ -534,7 +569,8 @@ Replace all validation rules for a project. Existing rules are deleted and repla
     "match_type": "regex",
     "pattern": "style\\s*=",
     "message": "Inline styles are not allowed",
-    "applies_to": ["*.html", "*.templ"]
+    "applies_to": ["*.html", "*.templ"],
+    "stack": "goth"
   },
   {
     "rule_id": "require-data-ai-id",
@@ -557,6 +593,7 @@ Replace all validation rules for a project. Existing rules are deleted and repla
 | `pattern` | Yes | — | Regex pattern or custom check name |
 | `message` | No | Auto-generated | Human-readable violation message |
 | `applies_to` | No | `["*"]` | Glob patterns for filename filtering |
+| `stack` | No | `""` (all stacks) | Technology stack this rule applies to (e.g. `goth`, `react`). Empty means universal. |
 
 **Match Types**
 
@@ -581,7 +618,8 @@ Validate content against all rules for a project.
 ```json
 {
   "filename": "button.templ",
-  "content": "<div style=\"color: red\" class=\"c-button\">\n  <span>Click me</span>\n</div>"
+  "content": "<div style=\"color: red\" class=\"c-button\">\n  <span>Click me</span>\n</div>",
+  "stack": "goth"
 }
 ```
 
@@ -589,6 +627,7 @@ Validate content against all rules for a project.
 |-------|----------|-------------|
 | `filename` | No | Used to match `applies_to` glob patterns. If omitted, all rules run. |
 | `content` | Yes | The content to validate |
+| `stack` | No | Technology stack to filter rules by. When set, only universal rules (no stack) and rules matching this stack are applied. |
 
 **Response** `200`
 
@@ -609,6 +648,140 @@ Validate content against all rules for a project.
 ```
 
 Returns `{"project": "...", "violations": [], "count": 0}` when content passes all rules.
+
+---
+
+## Rules Management
+
+Rule lifecycle management — propose, accept, reject, export, and import rules. Rules have three sources (`local`, `learned`, `external`) and a status (`accepted`, `proposed`, `rejected`). Only accepted rules participate in validation.
+
+### POST /api/rules/propose
+
+LLM agents propose a rule after solving an issue. The rule is stored with `source=learned`, `status=proposed` and must be accepted by a user before it fires during validation.
+
+**Request Body**
+
+```json
+{
+  "project": "w2c-forms",
+  "rule_id": "no-hardcoded-colors",
+  "severity": "warning",
+  "match_type": "regex",
+  "pattern": "#[0-9a-fA-F]{3,8}",
+  "message": "Use CSS custom properties instead of hardcoded colors",
+  "applies_to": ["*.templ", "*.css"],
+  "stack": "goth",
+  "proposed_by": "550e8400-e29b-41d4-a716-446655440000",
+  "context": "Instance found hardcoded hex colors causing theme inconsistency."
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `project` | Yes | Project the rule applies to |
+| `rule_id` | Yes | Unique rule identifier |
+| `pattern` | Yes | Regex pattern or custom check name |
+| `severity` | No | `error` or `warning` (default: `error`) |
+| `match_type` | No | `regex`, `missing`, or `custom` (default: `regex`) |
+| `message` | No | Human-readable violation message |
+| `stack` | No | Technology stack this rule targets |
+| `proposed_by` | No | Instance ID of the proposing agent |
+| `context` | No | Description of the issue that led to this rule |
+
+**Response** `200`
+
+```json
+{"project": "w2c-forms", "rule_id": "no-hardcoded-colors", "status": "proposed"}
+```
+
+### POST /api/rules/{project}/{ruleID}/accept
+
+Accept a proposed rule, making it active during validation.
+
+**Response** `200`
+
+```json
+{"project": "w2c-forms", "rule_id": "no-hardcoded-colors", "status": "accepted"}
+```
+
+**Error** `404` — Rule not found or not in proposed status.
+
+### POST /api/rules/{project}/{ruleID}/reject
+
+Reject a proposed rule. It remains stored but will never fire during validation.
+
+**Response** `200`
+
+```json
+{"project": "w2c-forms", "rule_id": "no-hardcoded-colors", "status": "rejected"}
+```
+
+**Error** `404` — Rule not found or not in proposed status.
+
+### GET /api/rules/export
+
+Export accepted rules filtered by source. Use this to download your organisation's rules and learned procedures.
+
+**Query Parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `source` | `local,learned` | Comma-separated list of sources to include |
+
+**Examples**
+
+```
+GET /api/rules/export
+GET /api/rules/export?source=local,learned
+GET /api/rules/export?source=external
+```
+
+**Response** `200` — Array of rule objects.
+
+```json
+[
+  {
+    "project": "w2c-forms",
+    "rule_id": "no-inline-style",
+    "severity": "error",
+    "match_type": "regex",
+    "pattern": "style\\s*=",
+    "message": "Inline styles are not allowed",
+    "stack": "goth",
+    "source": "local",
+    "status": "accepted"
+  }
+]
+```
+
+### POST /api/rules/import
+
+Bulk import rules. Uses UPSERT — existing rules with the same `project`/`rule_id` are updated. Imported rules are automatically accepted.
+
+**Request Body** — Array of rule objects:
+
+```json
+[
+  {
+    "project": "w2c-forms",
+    "rule_id": "ext-no-console-log",
+    "severity": "error",
+    "match_type": "regex",
+    "pattern": "console\\.log\\(",
+    "message": "Remove console.log statements",
+    "applies_to": ["*.js", "*.ts"],
+    "source": "external"
+  }
+]
+```
+
+**Response** `200`
+
+```json
+{"imported": 1}
+```
+
+**Error** `400` — Empty rules array.
 
 ---
 
@@ -645,12 +818,13 @@ StreamableHTTP MCP transport. Connect via MCP client libraries (e.g. `mark3labs/
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
-| `register_instance` | `name` (required), `workspace`, `intent` | Register this agent instance. Returns instance ID, token, and REST endpoints. |
-| `discover_instances` | `name`, `workspace` | Discover other registered agent instances. Filters are optional. |
+| `register_instance` | `name` (required), `workspace`, `intent`, `stack` | Register this agent instance. Returns instance ID, token, and REST endpoints. |
+| `discover_instances` | `name`, `workspace`, `stack` | Discover other registered agent instances. Filters are optional. |
 | `set_intent` | `instance_id` (required), `intent` (required) | Update intent and refresh last_seen timestamp. |
 | `get_endpoints` | *(none)* | Get all REST API and CLI endpoints for direct data access. |
+| `propose_rule` | `project` (required), `rule_id` (required), `pattern` (required), `message` (required), `severity`, `match_type`, `stack`, `proposed_by`, `context` | Propose a validation rule for user review. |
 
-The MCP interface provides 4 lightweight discovery tools (~750 tokens total). All data operations (state, specs, events) should go through the REST API directly, bypassing the LLM context window.
+The MCP interface provides 5 lightweight discovery and proposal tools. All data operations (state, specs, events) should go through the REST API directly, bypassing the LLM context window.
 
 ---
 

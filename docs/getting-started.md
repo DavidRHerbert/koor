@@ -186,6 +186,7 @@ Navigate to `http://localhost:9847` in a browser. The dashboard shows live state
 
 ## Next Steps
 
+- [Multi-Agent Workflow](multi-agent-workflow.md) — Coordinate multiple LLM agents (Controller + Frontend + Backend)
 - [Configuration](configuration.md) — All server flags, env vars, and config file options
 - [API Reference](api-reference.md) — Complete endpoint documentation
 - [CLI Reference](cli-reference.md) — All CLI commands and flags

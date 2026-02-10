@@ -12,6 +12,7 @@ import (
 
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/DavidRHerbert/koor/internal/dashboard"
 	"github.com/DavidRHerbert/koor/internal/events"
@@ -88,6 +89,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/validate/{project}/rules", s.handleValidateRulesPut)
 	mux.HandleFunc("POST /api/validate/{project}", s.handleValidate)
 
+	// Rules management endpoints.
+	mux.HandleFunc("POST /api/rules/propose", s.handleRulesPropose)
+	mux.HandleFunc("POST /api/rules/{project}/{ruleID}/accept", s.handleRulesAccept)
+	mux.HandleFunc("POST /api/rules/{project}/{ruleID}/reject", s.handleRulesReject)
+	mux.HandleFunc("GET /api/rules/export", s.handleRulesExport)
+	mux.HandleFunc("POST /api/rules/import", s.handleRulesImport)
+
 	// Metrics endpoint.
 	mux.HandleFunc("GET /api/metrics", s.handleMetrics)
 
@@ -105,11 +113,22 @@ func (s *Server) Handler() http.Handler {
 }
 
 // DashboardHandler returns the HTTP handler for the dashboard (separate port).
-// It proxies /api/* and /health to the API server, and serves embedded static files for everything else.
+// It proxies /api/* and /health to the API server, serves HTMX rules pages, and embedded static files.
 func (s *Server) DashboardHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /api/", s.dashboardProxy)
+
+	// Dashboard rules HTMX routes.
+	mux.HandleFunc("GET /rules", s.handleDashboardRules)
+	mux.HandleFunc("GET /rules/list", s.handleDashboardRulesList)
+	mux.HandleFunc("GET /rules/form", s.handleDashboardRuleForm)
+	mux.HandleFunc("POST /rules/save", s.handleDashboardRuleSave)
+	mux.HandleFunc("DELETE /rules/{project}/{ruleID}", s.handleDashboardRuleDelete)
+	mux.HandleFunc("POST /rules/{project}/{ruleID}/accept", s.handleDashboardRuleAccept)
+	mux.HandleFunc("POST /rules/{project}/{ruleID}/reject", s.handleDashboardRuleReject)
+
+	// Static files (CSS, JS, overview page).
 	mux.Handle("GET /", dashboard.Handler())
 	return mux
 }
@@ -425,7 +444,18 @@ func (s *Server) handleEventsHistory(w http.ResponseWriter, r *http.Request) {
 // --- Instance handlers ---
 
 func (s *Server) handleInstancesList(w http.ResponseWriter, r *http.Request) {
-	items, err := s.instanceReg.List(r.Context())
+	nameFilter := r.URL.Query().Get("name")
+	workspaceFilter := r.URL.Query().Get("workspace")
+	stackFilter := r.URL.Query().Get("stack")
+
+	var items []instances.Summary
+	var err error
+
+	if nameFilter != "" || workspaceFilter != "" || stackFilter != "" {
+		items, err = s.instanceReg.Discover(r.Context(), nameFilter, workspaceFilter, stackFilter)
+	} else {
+		items, err = s.instanceReg.List(r.Context())
+	}
 	if err != nil {
 		s.logger.Error("instances list failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list instances")
@@ -457,6 +487,7 @@ func (s *Server) handleInstanceGet(w http.ResponseWriter, r *http.Request) {
 		Name:         inst.Name,
 		Workspace:    inst.Workspace,
 		Intent:       inst.Intent,
+		Stack:        inst.Stack,
 		RegisteredAt: inst.RegisteredAt,
 		LastSeen:     inst.LastSeen,
 	})
@@ -467,6 +498,7 @@ func (s *Server) handleInstanceRegister(w http.ResponseWriter, r *http.Request) 
 		Name      string `json:"name"`
 		Workspace string `json:"workspace"`
 		Intent    string `json:"intent"`
+		Stack     string `json:"stack"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -477,7 +509,7 @@ func (s *Server) handleInstanceRegister(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	inst, err := s.instanceReg.Register(r.Context(), req.Name, req.Workspace, req.Intent)
+	inst, err := s.instanceReg.Register(r.Context(), req.Name, req.Workspace, req.Intent, req.Stack)
 	if err != nil {
 		s.logger.Error("instance register failed", "name", req.Name, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to register instance")
@@ -537,6 +569,21 @@ func (s *Server) handleValidateRulesList(w http.ResponseWriter, r *http.Request)
 	if rules == nil {
 		rules = []specs.Rule{}
 	}
+
+	// Optional stack filter.
+	if stackFilter := r.URL.Query().Get("stack"); stackFilter != "" {
+		var filtered []specs.Rule
+		for _, rule := range rules {
+			if rule.Stack == "" || rule.Stack == stackFilter {
+				filtered = append(filtered, rule)
+			}
+		}
+		if filtered == nil {
+			filtered = []specs.Rule{}
+		}
+		rules = filtered
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"project": project,
 		"rules":   rules,
@@ -596,6 +643,131 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- Rules management handlers ---
+
+func (s *Server) handleRulesPropose(w http.ResponseWriter, r *http.Request) {
+	var rule specs.Rule
+	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if rule.Project == "" {
+		writeError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	if rule.RuleID == "" {
+		writeError(w, http.StatusBadRequest, "rule_id is required")
+		return
+	}
+	if rule.Pattern == "" {
+		writeError(w, http.StatusBadRequest, "pattern is required")
+		return
+	}
+
+	if err := s.specReg.ProposeRule(r.Context(), rule); err != nil {
+		s.logger.Error("propose rule failed", "project", rule.Project, "rule_id", rule.RuleID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to propose rule")
+		return
+	}
+
+	s.logger.Info("rule proposed", "project", rule.Project, "rule_id", rule.RuleID, "proposed_by", rule.ProposedBy)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project": rule.Project,
+		"rule_id": rule.RuleID,
+		"status":  "proposed",
+	})
+}
+
+func (s *Server) handleRulesAccept(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	ruleID := r.PathValue("ruleID")
+
+	err := s.specReg.AcceptRule(r.Context(), project, ruleID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "proposed rule not found: "+project+"/"+ruleID)
+		return
+	}
+	if err != nil {
+		s.logger.Error("accept rule failed", "project", project, "rule_id", ruleID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to accept rule")
+		return
+	}
+
+	s.logger.Info("rule accepted", "project", project, "rule_id", ruleID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project": project,
+		"rule_id": ruleID,
+		"status":  "accepted",
+	})
+}
+
+func (s *Server) handleRulesReject(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	ruleID := r.PathValue("ruleID")
+
+	err := s.specReg.RejectRule(r.Context(), project, ruleID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "proposed rule not found: "+project+"/"+ruleID)
+		return
+	}
+	if err != nil {
+		s.logger.Error("reject rule failed", "project", project, "rule_id", ruleID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to reject rule")
+		return
+	}
+
+	s.logger.Info("rule rejected", "project", project, "rule_id", ruleID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project": project,
+		"rule_id": ruleID,
+		"status":  "rejected",
+	})
+}
+
+func (s *Server) handleRulesExport(w http.ResponseWriter, r *http.Request) {
+	sourceParam := r.URL.Query().Get("source")
+	var sources []string
+	if sourceParam != "" {
+		sources = strings.Split(sourceParam, ",")
+	}
+
+	rules, err := s.specReg.ExportRules(r.Context(), sources)
+	if err != nil {
+		s.logger.Error("export rules failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to export rules")
+		return
+	}
+	if rules == nil {
+		rules = []specs.Rule{}
+	}
+
+	writeJSON(w, http.StatusOK, rules)
+}
+
+func (s *Server) handleRulesImport(w http.ResponseWriter, r *http.Request) {
+	var rules []specs.Rule
+	if err := json.NewDecoder(r.Body).Decode(&rules); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if len(rules) == 0 {
+		writeError(w, http.StatusBadRequest, "empty rules array")
+		return
+	}
+
+	count, err := s.specReg.ImportRules(r.Context(), rules)
+	if err != nil {
+		s.logger.Error("import rules failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to import rules")
+		return
+	}
+
+	s.logger.Info("rules imported", "count", count)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"imported": count,
+	})
+}
+
 // --- Metrics handler ---
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -617,6 +789,153 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"api_bind":        s.config.Bind,
 		"dashboard_bind":  s.config.DashboardBind,
 	})
+}
+
+// --- Dashboard HTMX handlers ---
+
+// handleDashboardRules renders the full rules page.
+func (s *Server) handleDashboardRules(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	proposed, _ := s.specReg.ListAllRules(ctx, "", "", "", "proposed")
+	accepted, _ := s.specReg.ListAllRules(ctx, "", "", "", "accepted")
+
+	data := struct {
+		Proposed []specs.Rule
+		Rules    []specs.Rule
+	}{proposed, accepted}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := dashboard.Templates.ExecuteTemplate(w, "rules.html", data); err != nil {
+		s.logger.Error("render rules page", "error", err)
+		http.Error(w, "template error", http.StatusInternalServerError)
+	}
+}
+
+// handleDashboardRulesList renders the rules table fragment (HTMX partial).
+func (s *Server) handleDashboardRulesList(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	stack := r.URL.Query().Get("stack")
+	source := r.URL.Query().Get("source")
+	status := r.URL.Query().Get("status")
+
+	// Default to accepted rules if no status filter.
+	if status == "" {
+		status = "accepted"
+	}
+
+	rules, err := s.specReg.ListAllRules(r.Context(), project, stack, source, status)
+	if err != nil {
+		s.logger.Error("dashboard list rules", "error", err)
+		http.Error(w, "failed to list rules", http.StatusInternalServerError)
+		return
+	}
+	if rules == nil {
+		rules = []specs.Rule{}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := dashboard.Templates.ExecuteTemplate(w, "rules_table.html", rules); err != nil {
+		s.logger.Error("render rules table", "error", err)
+	}
+}
+
+// handleDashboardRuleForm renders the add/edit rule form (HTMX partial).
+func (s *Server) handleDashboardRuleForm(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	ruleID := r.URL.Query().Get("rule_id")
+
+	var rule specs.Rule
+	if project != "" && ruleID != "" {
+		got, err := s.specReg.GetRule(r.Context(), project, ruleID)
+		if err == nil {
+			rule = *got
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := dashboard.Templates.ExecuteTemplate(w, "rule_form.html", rule); err != nil {
+		s.logger.Error("render rule form", "error", err)
+	}
+}
+
+// handleDashboardRuleSave saves a rule from the form and re-renders the table.
+func (s *Server) handleDashboardRuleSave(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	rule := specs.Rule{
+		Project:   r.FormValue("project"),
+		RuleID:    r.FormValue("rule_id"),
+		Severity:  r.FormValue("severity"),
+		MatchType: r.FormValue("match_type"),
+		Pattern:   r.FormValue("pattern"),
+		Message:   r.FormValue("message"),
+		Stack:     r.FormValue("stack"),
+		Source:    r.FormValue("source"),
+	}
+	if rule.Source == "" {
+		rule.Source = "local"
+	}
+
+	if _, err := s.specReg.ImportRules(r.Context(), []specs.Rule{rule}); err != nil {
+		s.logger.Error("dashboard save rule", "error", err)
+		http.Error(w, "failed to save rule", http.StatusInternalServerError)
+		return
+	}
+
+	// Re-render the full table.
+	rules, _ := s.specReg.ListAllRules(r.Context(), "", "", "", "accepted")
+	if rules == nil {
+		rules = []specs.Rule{}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	dashboard.Templates.ExecuteTemplate(w, "rules_table.html", rules)
+}
+
+// handleDashboardRuleDelete deletes a rule and returns empty (HTMX removes the row).
+func (s *Server) handleDashboardRuleDelete(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	ruleID := r.PathValue("ruleID")
+
+	if err := s.specReg.DeleteRule(r.Context(), project, ruleID); err != nil {
+		s.logger.Error("dashboard delete rule", "project", project, "rule_id", ruleID, "error", err)
+		http.Error(w, "failed to delete rule", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleDashboardRuleAccept accepts a proposed rule (HTMX removes the proposed item).
+func (s *Server) handleDashboardRuleAccept(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	ruleID := r.PathValue("ruleID")
+
+	if err := s.specReg.AcceptRule(r.Context(), project, ruleID); err != nil {
+		s.logger.Error("dashboard accept rule", "project", project, "rule_id", ruleID, "error", err)
+		http.Error(w, "failed to accept rule", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleDashboardRuleReject rejects a proposed rule (HTMX removes the proposed item).
+func (s *Server) handleDashboardRuleReject(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	ruleID := r.PathValue("ruleID")
+
+	if err := s.specReg.RejectRule(r.Context(), project, ruleID); err != nil {
+		s.logger.Error("dashboard reject rule", "project", project, "rule_id", ruleID, "error", err)
+		http.Error(w, "failed to reject rule", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // formatInt converts an int64 to string for headers.

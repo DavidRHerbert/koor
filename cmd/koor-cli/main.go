@@ -41,6 +41,9 @@ func main() {
 	case "instances":
 		cfg := loadConfig()
 		handleInstances(cfg, os.Args[2:])
+	case "rules":
+		cfg := loadConfig()
+		handleRules(cfg, os.Args[2:])
 	case "register":
 		cfg := loadConfig()
 		handleRegister(cfg, os.Args[2:])
@@ -76,6 +79,9 @@ Commands:
   events publish <topic> --data <json>   Publish an event
   events history [--last N] [--topic pattern]   Recent events
   events subscribe [pattern]     Stream events via WebSocket
+
+  rules import --file <path>     Import rules from JSON file
+  rules export [--source <s>] [--output <path>]   Export rules as JSON
 
   register <name> [--workspace <path>] [--intent <text>]   Register this agent
   instances list                 List registered instances
@@ -523,6 +529,101 @@ func handleInstances(cfg *config, args []string) {
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown instances command: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+// --- Rules commands ---
+
+func handleRules(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli rules <import|export> [args]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "import":
+		filePath := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--file" && i+1 < len(args) {
+				filePath = args[i+1]
+				i++
+			}
+		}
+		if filePath == "" {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli rules import --file <path>")
+			os.Exit(1)
+		}
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fatal(fmt.Errorf("read file %s: %w", filePath, err))
+		}
+
+		// Validate it's a JSON array.
+		var rules []json.RawMessage
+		if err := json.Unmarshal(data, &rules); err != nil {
+			fatal(fmt.Errorf("invalid JSON in %s: %w", filePath, err))
+		}
+
+		resp, err := doRequest(cfg, "POST", "/api/rules/import", strings.NewReader(string(data)))
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "export":
+		source := ""
+		output := ""
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--source":
+				if i+1 < len(args) {
+					source = args[i+1]
+					i++
+				}
+			case "--output":
+				if i+1 < len(args) {
+					output = args[i+1]
+					i++
+				}
+			}
+		}
+
+		path := "/api/rules/export"
+		if source != "" {
+			path += "?source=" + source
+		}
+
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			fatal(fmt.Errorf("read response: %w", err))
+		}
+
+		// Pretty-print the JSON.
+		var v any
+		if err := json.Unmarshal(body, &v); err == nil {
+			body, _ = json.MarshalIndent(v, "", "  ")
+		}
+
+		if output != "" {
+			if err := os.WriteFile(output, append(body, '\n'), 0o644); err != nil {
+				fatal(fmt.Errorf("write file %s: %w", output, err))
+			}
+			fmt.Fprintf(os.Stderr, "exported to %s\n", output)
+		} else {
+			fmt.Println(string(body))
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown rules command: %s\n", args[0])
 		os.Exit(1)
 	}
 }

@@ -65,11 +65,24 @@ go build ./cmd/koor-cli
 ./koor-cli status
 ```
 
+## Multi-Agent Workflow
+
+Koor enables a **Controller + Agent** pattern for fullstack development:
+
+1. **Set up a Controller** — a VS Code instance with the project plan as local files
+2. **Controller generates configs** — AGENTS.md files for Frontend, Backend, etc.
+3. **Drop files, say "next"** — each agent reads its task from Koor and starts working
+4. **Agents coordinate through Koor** — events for requests, state for task assignments
+5. **User approves, never relays** — six words run the project: "setup agents", "next", "yes", "no", "check requests", "status"
+
+See the full guide: **[Multi-Agent Workflow](docs/multi-agent-workflow.md)**
+
 ## Documentation
 
 Full documentation is in the [docs/](docs/) folder:
 
 - **[Getting Started](docs/getting-started.md)** — Install, run, first API call in 5 minutes
+- **[Multi-Agent Workflow](docs/multi-agent-workflow.md)** — Coordinate multiple LLM agents across VS Code instances
 - **[Configuration](docs/configuration.md)** — Flags, env vars, config file, priority rules
 - **[API Reference](docs/api-reference.md)** — Complete REST API documentation
 - **[CLI Reference](docs/cli-reference.md)** — All koor-cli commands
@@ -97,7 +110,7 @@ CLI ───REST───/
 ## Development
 
 ```bash
-go test ./... -v -count=1    # 52 tests
+go test ./... -v -count=1    # 68 tests
 go build ./...               # Build all
 ```
 

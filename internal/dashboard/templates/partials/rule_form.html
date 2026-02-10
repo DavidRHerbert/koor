@@ -1,0 +1,61 @@
+<div class="modal-overlay" onclick="if(event.target===this)document.getElementById('rule-modal').innerHTML=''">
+  <div class="modal-content card">
+    <h2>{{if .RuleID}}Edit Rule{{else}}Add Rule{{end}}</h2>
+    <form hx-post="/rules/save" hx-target="#rules-table" hx-swap="innerHTML"
+          hx-on::after-request="if(event.detail.successful)document.getElementById('rule-modal').innerHTML=''">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Project</label>
+          <input type="text" name="project" value="{{.Project}}" required {{if .RuleID}}readonly{{end}}>
+        </div>
+        <div class="form-group">
+          <label>Rule ID</label>
+          <input type="text" name="rule_id" value="{{.RuleID}}" required {{if .RuleID}}readonly{{end}}>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Severity</label>
+          <select name="severity">
+            <option value="error" {{if eq .Severity "error"}}selected{{end}}>error</option>
+            <option value="warning" {{if eq .Severity "warning"}}selected{{end}}>warning</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Match Type</label>
+          <select name="match_type">
+            <option value="regex" {{if eq .MatchType "regex"}}selected{{end}}>regex</option>
+            <option value="missing" {{if eq .MatchType "missing"}}selected{{end}}>missing</option>
+            <option value="custom" {{if eq .MatchType "custom"}}selected{{end}}>custom</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Pattern</label>
+        <input type="text" name="pattern" value="{{.Pattern}}" required>
+      </div>
+      <div class="form-group">
+        <label>Message</label>
+        <input type="text" name="message" value="{{.Message}}">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Stack</label>
+          <input type="text" name="stack" value="{{.Stack}}" placeholder="empty = all stacks">
+        </div>
+        <div class="form-group">
+          <label>Source</label>
+          <select name="source">
+            <option value="local" {{if or (eq .Source "local") (eq .Source "")}}selected{{end}}>local</option>
+            <option value="learned" {{if eq .Source "learned"}}selected{{end}}>learned</option>
+            <option value="external" {{if eq .Source "external"}}selected{{end}}>external</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('rule-modal').innerHTML=''">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>

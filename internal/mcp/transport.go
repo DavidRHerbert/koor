@@ -8,6 +8,7 @@ import (
 
 	"github.com/DavidRHerbert/koor/internal/instances"
 	"github.com/DavidRHerbert/koor/internal/server/serverconfig"
+	"github.com/DavidRHerbert/koor/internal/specs"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -15,14 +16,16 @@ import (
 // Transport wraps the MCP server and exposes it as an http.Handler.
 type Transport struct {
 	registry *instances.Registry
+	specReg  *specs.Registry
 	config   serverconfig.Endpoints
 	handler  http.Handler
 }
 
-// New creates the MCP transport with 4 discovery tools.
-func New(registry *instances.Registry, endpoints serverconfig.Endpoints) *Transport {
+// New creates the MCP transport with 5 discovery/proposal tools.
+func New(registry *instances.Registry, specReg *specs.Registry, endpoints serverconfig.Endpoints) *Transport {
 	t := &Transport{
 		registry: registry,
+		specReg:  specReg,
 		config:   endpoints,
 	}
 
@@ -39,6 +42,7 @@ func New(registry *instances.Registry, endpoints serverconfig.Endpoints) *Transp
 			mcplib.WithString("name", mcplib.Required(), mcplib.Description("Agent name (e.g. 'claude-frontend')")),
 			mcplib.WithString("workspace", mcplib.Description("Workspace path or identifier")),
 			mcplib.WithString("intent", mcplib.Description("Current intent or task description")),
+			mcplib.WithString("stack", mcplib.Description("Technology stack identifier (e.g. 'goth', 'react')")),
 		),
 		t.handleRegisterInstance,
 	)
@@ -46,9 +50,10 @@ func New(registry *instances.Registry, endpoints serverconfig.Endpoints) *Transp
 	// Tool 2: discover_instances
 	srv.AddTool(
 		mcplib.NewTool("discover_instances",
-			mcplib.WithDescription("Discover other registered agent instances. Optionally filter by name or workspace."),
+			mcplib.WithDescription("Discover other registered agent instances. Optionally filter by name, workspace, or stack."),
 			mcplib.WithString("name", mcplib.Description("Filter by agent name")),
 			mcplib.WithString("workspace", mcplib.Description("Filter by workspace")),
+			mcplib.WithString("stack", mcplib.Description("Filter by technology stack (e.g. 'goth', 'react')")),
 		),
 		t.handleDiscoverInstances,
 	)
@@ -69,6 +74,23 @@ func New(registry *instances.Registry, endpoints serverconfig.Endpoints) *Transp
 			mcplib.WithDescription("Get the REST API and CLI endpoints for direct data access. Use these endpoints with curl or koor-cli instead of MCP for data operations."),
 		),
 		t.handleGetEndpoints,
+	)
+
+	// Tool 5: propose_rule
+	srv.AddTool(
+		mcplib.NewTool("propose_rule",
+			mcplib.WithDescription("Propose a validation rule based on a problem you solved. The rule will be reviewed by the user before activation."),
+			mcplib.WithString("project", mcplib.Required(), mcplib.Description("Project the rule applies to")),
+			mcplib.WithString("rule_id", mcplib.Required(), mcplib.Description("Unique rule identifier (e.g. 'no-hardcoded-colors')")),
+			mcplib.WithString("pattern", mcplib.Required(), mcplib.Description("Regex pattern or custom check name")),
+			mcplib.WithString("message", mcplib.Required(), mcplib.Description("Human-readable violation message")),
+			mcplib.WithString("severity", mcplib.Description("'error' or 'warning' (default: error)")),
+			mcplib.WithString("match_type", mcplib.Description("'regex', 'missing', or 'custom' (default: regex)")),
+			mcplib.WithString("stack", mcplib.Description("Technology stack this rule targets (empty = universal)")),
+			mcplib.WithString("proposed_by", mcplib.Description("Instance ID of the proposing agent")),
+			mcplib.WithString("context", mcplib.Description("Description of the issue that led to this rule")),
+		),
+		t.handleProposeRule,
 	)
 
 	streamable := mcpserver.NewStreamableHTTPServer(srv)
@@ -96,12 +118,13 @@ func (t *Transport) handleRegisterInstance(ctx context.Context, req mcplib.CallT
 	name := getArg(req, "name")
 	workspace := getArg(req, "workspace")
 	intent := getArg(req, "intent")
+	stack := getArg(req, "stack")
 
 	if name == "" {
 		return mcplib.NewToolResultError("name is required"), nil
 	}
 
-	inst, err := t.registry.Register(ctx, name, workspace, intent)
+	inst, err := t.registry.Register(ctx, name, workspace, intent, stack)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("registration failed: %v", err)), nil
 	}
@@ -112,6 +135,7 @@ func (t *Transport) handleRegisterInstance(ctx context.Context, req mcplib.CallT
 		"name":          inst.Name,
 		"workspace":     inst.Workspace,
 		"intent":        inst.Intent,
+		"stack":         inst.Stack,
 		"registered_at": inst.RegisteredAt,
 		"message":       "Registered successfully. Use the token for authenticated requests. Use REST API or koor-cli for data operations.",
 	}, "", "  ")
@@ -122,8 +146,9 @@ func (t *Transport) handleRegisterInstance(ctx context.Context, req mcplib.CallT
 func (t *Transport) handleDiscoverInstances(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	name := getArg(req, "name")
 	workspace := getArg(req, "workspace")
+	stack := getArg(req, "stack")
 
-	items, err := t.registry.Discover(ctx, name, workspace)
+	items, err := t.registry.Discover(ctx, name, workspace, stack)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("discovery failed: %v", err)), nil
 	}
@@ -181,12 +206,56 @@ func (t *Transport) handleGetEndpoints(ctx context.Context, req mcplib.CallToolR
 			"events_ws":      "GET /api/events/subscribe",
 			"instances_list": "GET /api/instances",
 			"instance_get":   "GET /api/instances/{id}",
+			"rules_export":   "GET /api/rules/export",
+			"rules_import":   "POST /api/rules/import",
 		},
 		"cli": map[string]string{
 			"install": "go install github.com/DavidRHerbert/koor/cmd/koor-cli@latest",
 			"usage":   "koor-cli --help",
 		},
-		"message": "Use these REST endpoints or koor-cli for data operations. MCP is for discovery only.",
+		"message": "Use these REST endpoints or koor-cli for data operations. MCP is for discovery and rule proposals only.",
+	}, "", "  ")
+
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (t *Transport) handleProposeRule(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	project := getArg(req, "project")
+	ruleID := getArg(req, "rule_id")
+	pattern := getArg(req, "pattern")
+	message := getArg(req, "message")
+
+	if project == "" {
+		return mcplib.NewToolResultError("project is required"), nil
+	}
+	if ruleID == "" {
+		return mcplib.NewToolResultError("rule_id is required"), nil
+	}
+	if pattern == "" {
+		return mcplib.NewToolResultError("pattern is required"), nil
+	}
+
+	rule := specs.Rule{
+		Project:    project,
+		RuleID:     ruleID,
+		Severity:   getArg(req, "severity"),
+		MatchType:  getArg(req, "match_type"),
+		Pattern:    pattern,
+		Message:    message,
+		Stack:      getArg(req, "stack"),
+		ProposedBy: getArg(req, "proposed_by"),
+		Context:    getArg(req, "context"),
+	}
+
+	if err := t.specReg.ProposeRule(ctx, rule); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("propose rule failed: %v", err)), nil
+	}
+
+	data, _ := json.MarshalIndent(map[string]any{
+		"project": project,
+		"rule_id": ruleID,
+		"status":  "proposed",
+		"message": "Rule proposed successfully. It will be reviewed by the user before activation.",
 	}, "", "  ")
 
 	return mcplib.NewToolResultText(string(data)), nil

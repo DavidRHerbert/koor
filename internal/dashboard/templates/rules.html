@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Koor Dashboard - Rules</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/htmx.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Koor Dashboard</h1>
+    <nav class="nav-links">
+      <a href="/">Overview</a>
+      <a href="/rules" class="active">Rules</a>
+    </nav>
+  </header>
+
+  <main class="rules-layout">
+    <div class="rules-toolbar">
+      <div class="filters">
+        <label>Project
+          <input type="text" id="filter-project" name="project" placeholder="all projects"
+            hx-get="/rules/list" hx-trigger="input changed delay:300ms" hx-target="#rules-table" hx-include=".filters input, .filters select">
+        </label>
+        <label>Stack
+          <select name="stack" hx-get="/rules/list" hx-trigger="change" hx-target="#rules-table" hx-include=".filters input, .filters select">
+            <option value="">All stacks</option>
+            <option value="goth">goth</option>
+            <option value="react">react</option>
+          </select>
+        </label>
+        <label>Source
+          <select name="source" hx-get="/rules/list" hx-trigger="change" hx-target="#rules-table" hx-include=".filters input, .filters select">
+            <option value="">All sources</option>
+            <option value="local">local</option>
+            <option value="learned">learned</option>
+            <option value="external">external</option>
+          </select>
+        </label>
+        <label>Status
+          <select name="status" hx-get="/rules/list" hx-trigger="change" hx-target="#rules-table" hx-include=".filters input, .filters select">
+            <option value="">All statuses</option>
+            <option value="accepted">accepted</option>
+            <option value="proposed">proposed</option>
+            <option value="rejected">rejected</option>
+          </select>
+        </label>
+      </div>
+      <div class="toolbar-actions">
+        <button hx-get="/rules/form" hx-target="#rule-modal" hx-swap="innerHTML" class="btn btn-primary">+ Add Rule</button>
+        <a href="/api/rules/export?source=local,learned" class="btn btn-secondary" download="koor-rules.json">Export</a>
+      </div>
+    </div>
+
+    {{if .Proposed}}
+    <section class="card proposed-section">
+      <h2>Proposed Rules ({{len .Proposed}} pending review)</h2>
+      <div class="proposed-list">
+        {{range .Proposed}}
+        <div class="proposed-item" id="proposed-{{.Project}}-{{.RuleID}}">
+          <div class="proposed-info">
+            <span class="badge badge-warning">proposed</span>
+            <strong>{{.RuleID}}</strong>
+            <span class="badge badge-info">{{.Project}}</span>
+            {{if .Stack}}<span class="badge badge-info">{{.Stack}}</span>{{end}}
+            <span class="proposed-pattern">{{.Pattern}}</span>
+          </div>
+          {{if .Context}}<div class="proposed-context">{{.Context}}</div>{{end}}
+          <div class="proposed-actions">
+            <button hx-post="/rules/{{.Project}}/{{.RuleID}}/accept" hx-target="#proposed-{{.Project}}-{{.RuleID}}" hx-swap="outerHTML" class="btn btn-ok btn-sm">Accept</button>
+            <button hx-post="/rules/{{.Project}}/{{.RuleID}}/reject" hx-target="#proposed-{{.Project}}-{{.RuleID}}" hx-swap="outerHTML" class="btn btn-danger btn-sm">Reject</button>
+          </div>
+        </div>
+        {{end}}
+      </div>
+    </section>
+    {{end}}
+
+    <section class="card">
+      <h2>Rules ({{len .Rules}})</h2>
+      <div id="rules-table" hx-get="/rules/list" hx-trigger="load" hx-swap="innerHTML">
+        Loading...
+      </div>
+    </section>
+  </main>
+
+  <div id="rule-modal"></div>
+
+  <footer>
+    <p>Koor Coordination Server</p>
+  </footer>
+</body>
+</html>

@@ -407,7 +407,46 @@ koor-cli events publish <topic> --data <json>
 koor-cli events history [--last N] [--topic pattern]
 koor-cli events subscribe [pattern]
 
+koor-cli rules import --file <path>
+koor-cli rules export [--source <sources>] [--output <path>]
+
 koor-cli register <name> [--workspace <path>] [--intent <text>]
 koor-cli instances list
 koor-cli instances get <id>
+```
+
+---
+
+## Rules Commands
+
+### Import Rules
+
+Import rules from a JSON file. Uses UPSERT, safe to re-run:
+
+```bash
+koor-cli rules import --file rules/external/claude-code-rules.json
+```
+
+**Output:**
+
+```json
+{"imported": 8}
+```
+
+### Export Rules
+
+Export rules as JSON. Default exports `local` and `learned` sources (excludes external):
+
+```bash
+# Export to stdout
+koor-cli rules export
+
+# Export specific sources
+koor-cli rules export --source local,learned
+
+# Export to file
+koor-cli rules export --output my-org-rules.json
+
+# Export only external rules
+koor-cli rules export --source external --output external-backup.json
 ```

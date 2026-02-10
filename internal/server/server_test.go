@@ -289,9 +289,9 @@ func TestEventsHistoryEmpty(t *testing.T) {
 func TestInstanceRegisterAndList(t *testing.T) {
 	ts := testServer(t, "")
 
-	// Register an instance.
+	// Register an instance with stack.
 	req, _ := http.NewRequest("POST", ts.URL+"/api/instances/register",
-		strings.NewReader(`{"name":"claude-test","workspace":"/tmp","intent":"testing"}`))
+		strings.NewReader(`{"name":"claude-test","workspace":"/tmp","intent":"testing","stack":"goth"}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -308,6 +308,9 @@ func TestInstanceRegisterAndList(t *testing.T) {
 	if !strings.Contains(string(body), `"token"`) {
 		t.Errorf("register response should contain token: %s", body)
 	}
+	if !strings.Contains(string(body), `"stack":"goth"`) {
+		t.Errorf("register response should contain stack: %s", body)
+	}
 
 	// List instances.
 	resp2, _ := http.Get(ts.URL + "/api/instances")
@@ -315,6 +318,35 @@ func TestInstanceRegisterAndList(t *testing.T) {
 	body2, _ := io.ReadAll(resp2.Body)
 	if !strings.Contains(string(body2), "claude-test") {
 		t.Errorf("list should contain registered instance: %s", body2)
+	}
+}
+
+func TestInstanceListByStack(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Register goth instance.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/instances/register",
+		strings.NewReader(`{"name":"goth-agent","stack":"goth"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Register react instance.
+	req, _ = http.NewRequest("POST", ts.URL+"/api/instances/register",
+		strings.NewReader(`{"name":"react-agent","stack":"react"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Filter by stack=goth.
+	resp, _ = http.Get(ts.URL + "/api/instances?stack=goth")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "goth-agent") {
+		t.Errorf("stack filter should contain goth-agent: %s", body)
+	}
+	if strings.Contains(string(body), "react-agent") {
+		t.Errorf("stack filter should not contain react-agent: %s", body)
 	}
 }
 
@@ -423,6 +455,163 @@ func TestValidateEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"count":1`) {
 		t.Errorf("should have count 1: %s", body)
+	}
+}
+
+func TestRulesProposeAcceptReject(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Propose a rule.
+	resp, _ := http.Post(ts.URL+"/api/rules/propose", "application/json",
+		strings.NewReader(`{"project":"proj","rule_id":"no-eval","pattern":"\\beval\\(","message":"no eval","proposed_by":"inst-1","context":"found eval usage"}`))
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("propose: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"status":"proposed"`) {
+		t.Errorf("propose should return proposed status: %s", body)
+	}
+
+	// Proposed rule should not fire during validation.
+	resp, _ = http.Post(ts.URL+"/api/validate/proj", "application/json",
+		strings.NewReader(`{"content":"eval('x')"}`))
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"count":0`) {
+		t.Errorf("proposed rule should not fire: %s", body)
+	}
+
+	// Accept the rule.
+	resp, _ = http.Post(ts.URL+"/api/rules/proj/no-eval/accept", "application/json", nil)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("accept: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	// Now rule should fire.
+	resp, _ = http.Post(ts.URL+"/api/validate/proj", "application/json",
+		strings.NewReader(`{"content":"eval('x')"}`))
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"count":1`) {
+		t.Errorf("accepted rule should fire: %s", body)
+	}
+
+	// Propose another rule and reject it.
+	http.Post(ts.URL+"/api/rules/propose", "application/json",
+		strings.NewReader(`{"project":"proj","rule_id":"no-foo","pattern":"foo","message":"no foo"}`))
+	resp, _ = http.Post(ts.URL+"/api/rules/proj/no-foo/reject", "application/json", nil)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("reject: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"status":"rejected"`) {
+		t.Errorf("reject should return rejected status: %s", body)
+	}
+}
+
+func TestRulesProposeValidation(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Missing project.
+	resp, _ := http.Post(ts.URL+"/api/rules/propose", "application/json",
+		strings.NewReader(`{"rule_id":"x","pattern":"y"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for missing project, got %d", resp.StatusCode)
+	}
+
+	// Missing rule_id.
+	resp, _ = http.Post(ts.URL+"/api/rules/propose", "application/json",
+		strings.NewReader(`{"project":"p","pattern":"y"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for missing rule_id, got %d", resp.StatusCode)
+	}
+
+	// Missing pattern.
+	resp, _ = http.Post(ts.URL+"/api/rules/propose", "application/json",
+		strings.NewReader(`{"project":"p","rule_id":"x"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for missing pattern, got %d", resp.StatusCode)
+	}
+}
+
+func TestRulesAcceptRejectNotFound(t *testing.T) {
+	ts := testServer(t, "")
+
+	resp, _ := http.Post(ts.URL+"/api/rules/proj/nonexistent/accept", "application/json", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("accept nonexistent: expected 404, got %d", resp.StatusCode)
+	}
+
+	resp, _ = http.Post(ts.URL+"/api/rules/proj/nonexistent/reject", "application/json", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("reject nonexistent: expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestRulesExportImport(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Import rules.
+	resp, _ := http.Post(ts.URL+"/api/rules/import", "application/json",
+		strings.NewReader(`[{"project":"proj","rule_id":"ext-1","pattern":"console\\.log","source":"external","message":"no console.log"},{"project":"proj","rule_id":"ext-2","pattern":"debugger","source":"external","message":"no debugger"}]`))
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("import: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"imported":2`) {
+		t.Errorf("should report 2 imported: %s", body)
+	}
+
+	// Imported rules should fire.
+	resp, _ = http.Post(ts.URL+"/api/validate/proj", "application/json",
+		strings.NewReader(`{"content":"console.log('x'); debugger;"}`))
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"count":2`) {
+		t.Errorf("imported rules should fire: %s", body)
+	}
+
+	// Export — default sources (local+learned), should not include external.
+	resp, _ = http.Get(ts.URL + "/api/rules/export")
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("export: expected 200, got %d", resp.StatusCode)
+	}
+	var exported []json.RawMessage
+	json.Unmarshal(body, &exported)
+	if len(exported) != 0 {
+		t.Errorf("default export should not include external rules, got %d", len(exported))
+	}
+
+	// Export external.
+	resp, _ = http.Get(ts.URL + "/api/rules/export?source=external")
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	json.Unmarshal(body, &exported)
+	if len(exported) != 2 {
+		t.Errorf("external export should have 2 rules, got %d", len(exported))
+	}
+}
+
+func TestRulesImportEmpty(t *testing.T) {
+	ts := testServer(t, "")
+
+	resp, _ := http.Post(ts.URL+"/api/rules/import", "application/json",
+		strings.NewReader(`[]`))
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for empty import, got %d", resp.StatusCode)
 	}
 }
 

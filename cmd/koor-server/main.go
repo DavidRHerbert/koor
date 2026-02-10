@@ -93,7 +93,7 @@ func main() {
 	instanceReg := instances.New(database)
 
 	// Create MCP transport.
-	mcpTransport := koormcp.New(instanceReg, serverconfig.Endpoints{
+	mcpTransport := koormcp.New(instanceReg, specReg, serverconfig.Endpoints{
 		APIBase: "http://" + *bind,
 	})
 

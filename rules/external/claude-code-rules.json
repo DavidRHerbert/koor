@@ -1,0 +1,80 @@
+[
+  {
+    "project": "_global",
+    "rule_id": "ext-no-console-log",
+    "severity": "warning",
+    "match_type": "regex",
+    "pattern": "console\\.log\\(",
+    "message": "Remove console.log statements before committing",
+    "applies_to": ["*.js", "*.ts", "*.tsx"],
+    "source": "external"
+  },
+  {
+    "project": "_global",
+    "rule_id": "ext-no-debugger",
+    "severity": "error",
+    "match_type": "regex",
+    "pattern": "\\bdebugger\\b",
+    "message": "Remove debugger statements",
+    "applies_to": ["*.js", "*.ts", "*.tsx"],
+    "source": "external"
+  },
+  {
+    "project": "_global",
+    "rule_id": "ext-no-todo-fixme",
+    "severity": "warning",
+    "match_type": "regex",
+    "pattern": "(?i)(TODO|FIXME|HACK|XXX):",
+    "message": "Resolve TODO/FIXME comments before shipping",
+    "source": "external"
+  },
+  {
+    "project": "_global",
+    "rule_id": "ext-no-hardcoded-localhost",
+    "severity": "warning",
+    "match_type": "regex",
+    "pattern": "https?://localhost:\\d+",
+    "message": "Avoid hardcoded localhost URLs; use configuration or environment variables",
+    "applies_to": ["*.js", "*.ts", "*.go", "*.py"],
+    "source": "external"
+  },
+  {
+    "project": "_global",
+    "rule_id": "ext-no-env-secrets",
+    "severity": "error",
+    "match_type": "regex",
+    "pattern": "(API_KEY|SECRET_KEY|PASSWORD|TOKEN)\\s*=\\s*[\"'][^\"']{8,}",
+    "message": "Do not hardcode secrets; use environment variables or a secrets manager",
+    "source": "external"
+  },
+  {
+    "project": "_global",
+    "rule_id": "ext-no-eval-js",
+    "severity": "error",
+    "match_type": "regex",
+    "pattern": "\\beval\\(",
+    "message": "Avoid eval() — it enables code injection attacks",
+    "applies_to": ["*.js", "*.ts", "*.tsx"],
+    "source": "external"
+  },
+  {
+    "project": "_global",
+    "rule_id": "ext-no-fmt-println-go",
+    "severity": "warning",
+    "match_type": "regex",
+    "pattern": "fmt\\.Println\\(",
+    "message": "Use structured logging (slog) instead of fmt.Println in production code",
+    "applies_to": ["*.go"],
+    "source": "external"
+  },
+  {
+    "project": "_global",
+    "rule_id": "ext-no-panic-go",
+    "severity": "warning",
+    "match_type": "regex",
+    "pattern": "\\bpanic\\(",
+    "message": "Avoid panic in library code; return errors instead",
+    "applies_to": ["*.go"],
+    "source": "external"
+  }
+]
