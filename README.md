@@ -33,18 +33,18 @@ Furthermore, the developer is free to become an AI slop generator! Conducting co
 
 ## What's Genuinely New
 
-Koor combines coordination + shared specifications + cross-LLM + standalone binary. As of February 2026, no single system covers all five:
+Koor combines coordination + shared specifications + contract validation + cross-LLM + project scaffolding + standalone binary. As of February 2026, no single system covers all seven:
 
-| System | Coordination | Shared State | Shared Specs | Cross-LLM | Standalone |
-|--------|:---:|:---:|:---:|:---:|:---:|
-| Claude Agent Teams | Yes | No | No | No | No |
-| Claude-Flow | Yes | Yes | No | No | No |
-| LangGraph | Yes | Yes | No | No | No |
-| AutoGen | Yes | Yes | No | No | No |
-| A2A Protocol | Yes | No | No | Yes | No |
-| MCP Gateways | No | No | No | Yes | Yes |
-| W2C AI MCP | No | No | Yes | Yes* | Yes |
-| **Koor** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
+| System | Coordination | Shared State | Shared Specs | Contracts | Cross-LLM | Scaffolding | Standalone |
+|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Claude Agent Teams | Yes | No | No | No | No | No | No |
+| Claude-Flow | Yes | Yes | No | No | No | No | No |
+| LangGraph | Yes | Yes | No | No | No | No | No |
+| AutoGen | Yes | Yes | No | No | No | No | No |
+| A2A Protocol | Yes | No | No | No | Yes | No | No |
+| MCP Gateways | No | No | No | No | Yes | No | Yes |
+| W2C AI MCP | No | No | Yes | No | Yes* | No | Yes |
+| **Koor** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
 
 
 
