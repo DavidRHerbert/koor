@@ -48,6 +48,30 @@ Koor combines coordination + shared specifications + contract validation + cross
 
 
 
+## Two Communication Channels
+
+There are two communication channels to Koor:
+
+| | CLI (Data Plane) | MCP (Control Plane) |
+|---|---|---|
+| **Transport** | REST over HTTP | MCP protocol (SSE stream) |
+| **Used by** | The AI agent running commands | The IDE itself (Claude Code / Cursor) |
+| **Purpose** | Read/write state, publish/subscribe events, activate | Register instance, discover peers, propose rules, set intent |
+| **Connection** | Stateless — one HTTP call per command | Persistent — IDE holds open connection |
+| **Who initiates** | Agent says `./koor-cli ...` in terminal | IDE connects automatically via `.claude/mcp.json` |
+
+The split exists because MCP tools appear in the AI's tool palette (like `register_instance`, `discover_instances`) while CLI commands are run as bash (`./koor-cli state get ...`). MCP handles identity/discovery; CLI handles all the actual data work — avoiding the dreaded token tax.
+
+The key insight: Koor is already network-ready by design. Every agent talks to it over HTTP — whether that HTTP goes to localhost or across the internet is just a URL change.
+
+# These do the exact same thing:
+./koor-cli state get Project/task
+curl http://localhost:9800/api/state/Project/task -H "Authorization: Bearer token"
+So why copy a binary instead?
+ Because shorter commands = fewer tokens
+./koor-cli state get X is ~8 tokens. The equivalent curl with URL, headers, auth, and content-type is ~40 tokens. Agents call this hundreds of times per session. It adds up.
+ Auth is handled once + Self-contained workspace + 
+
 ## How It Works
 
 1. Run `koor-wizard` — interactive TUI scaffolds your entire project (Controller + agents)
@@ -163,7 +187,7 @@ CLI ───REST───/
 ## Development
 
 ```bash
-go test ./... -v -count=1    # 86 tests
+go test ./... -v -count=1    # 120 tests
 go build ./...               # Build all
 ```
 
