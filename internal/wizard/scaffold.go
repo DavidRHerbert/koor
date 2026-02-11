@@ -2,8 +2,11 @@ package wizard
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 )
 
 // ProjectConfig holds all data needed to scaffold a new project.
@@ -12,6 +15,7 @@ type ProjectConfig struct {
 	ServerURL   string
 	ParentDir   string
 	Agents      []AgentInfo
+	CLIPath     string // path to koor-cli binary (empty = skip copy)
 }
 
 // AgentConfig holds data needed to scaffold a single agent.
@@ -21,6 +25,7 @@ type AgentConfig struct {
 	Stack        string
 	ServerURL    string
 	WorkspaceDir string
+	CLIPath      string // path to koor-cli binary (empty = skip copy)
 }
 
 // AgentInfo is the per-agent data collected during the wizard.
@@ -61,6 +66,7 @@ func ScaffoldProject(cfg ProjectConfig) error {
 			Stack:        a.Stack,
 			ServerURL:    cfg.ServerURL,
 			WorkspaceDir: agentDir,
+			CLIPath:      cfg.CLIPath,
 		}
 		if err := ScaffoldAgent(agentCfg); err != nil {
 			return fmt.Errorf("agent %s: %w", a.Name, err)
@@ -129,6 +135,13 @@ func scaffoldController(dir string, cfg ProjectConfig, agents []agentSummary) er
 		return fmt.Errorf("write overview.md: %w", err)
 	}
 
+	// Copy koor-cli into controller workspace if available.
+	if cfg.CLIPath != "" {
+		if _, err := CopyCLI(cfg.CLIPath, dir); err != nil {
+			return fmt.Errorf("copy koor-cli: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -195,5 +208,69 @@ func ScaffoldAgent(cfg AgentConfig) error {
 		return fmt.Errorf("write .cursorrules: %w", err)
 	}
 
+	// Copy koor-cli into agent workspace if available.
+	if cfg.CLIPath != "" {
+		if _, err := CopyCLI(cfg.CLIPath, cfg.WorkspaceDir); err != nil {
+			return fmt.Errorf("copy koor-cli: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// cliName returns the platform-appropriate koor-cli binary name.
+func cliName() string {
+	if runtime.GOOS == "windows" {
+		return "koor-cli.exe"
+	}
+	return "koor-cli"
+}
+
+// FindCLI searches for the koor-cli binary.
+// It checks next to the running executable first, then falls back to PATH.
+// Returns the absolute path or empty string if not found.
+func FindCLI() string {
+	name := cliName()
+
+	// Check next to the running executable.
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Check PATH.
+	if p, err := exec.LookPath(name); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+		return p
+	}
+
+	return ""
+}
+
+// CopyCLI copies the koor-cli binary from srcPath into destDir.
+// Returns the destination path.
+func CopyCLI(srcPath, destDir string) (string, error) {
+	destPath := filepath.Join(destDir, cliName())
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("open source %s: %w", srcPath, err)
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return "", fmt.Errorf("create dest %s: %w", destPath, err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return "", fmt.Errorf("copy: %w", err)
+	}
+
+	return destPath, nil
 }

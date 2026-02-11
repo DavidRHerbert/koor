@@ -111,9 +111,11 @@ async function refreshInstances() {
   }
 
   let html = '<table>';
-  html += '<tr><td><strong>Name</strong></td><td><strong>Intent</strong></td></tr>';
+  html += '<tr><td><strong>Name</strong></td><td><strong>Status</strong></td><td><strong>Intent</strong></td></tr>';
   for (const inst of data) {
-    html += `<tr><td>${esc(inst.name)}</td><td>${esc(inst.intent || '-')}</td></tr>`;
+    const status = inst.status || 'pending';
+    const badgeClass = status === 'active' ? 'badge-ok' : 'badge-warning';
+    html += `<tr><td>${esc(inst.name)}</td><td><span class="badge ${badgeClass}">${esc(status)}</span></td><td>${esc(inst.intent || '-')}</td></tr>`;
   }
   html += '</table>';
   el.innerHTML = html;

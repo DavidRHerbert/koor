@@ -128,12 +128,16 @@ func runNewProject(opts Options) error {
 		return nil
 	}
 
+	// Find koor-cli binary for distribution.
+	cliPath := FindCLI()
+
 	// Execute scaffold.
 	cfg := ProjectConfig{
 		ProjectName: projectName,
 		ServerURL:   serverURL,
 		ParentDir:   parentDir,
 		Agents:      agents,
+		CLIPath:     cliPath,
 	}
 	if err := ScaffoldProject(cfg); err != nil {
 		return fmt.Errorf("scaffold failed: %w", err)
@@ -211,12 +215,15 @@ func runAddAgent(opts Options) error {
 		return nil
 	}
 
+	cliPath := FindCLI()
+
 	cfg := AgentConfig{
 		ProjectName:  projectName,
 		AgentName:    agentName,
 		Stack:        agentStack,
 		ServerURL:    serverURL,
 		WorkspaceDir: workspaceDir,
+		CLIPath:      cliPath,
 	}
 	if err := ScaffoldAgent(cfg); err != nil {
 		return fmt.Errorf("scaffold failed: %w", err)
@@ -293,6 +300,14 @@ func printNewProjectSuccess(cfg ProjectConfig) {
 		fmt.Printf("  %s/    (%s - %s)\n", filepath.Join(cfg.ParentDir, slug+"-"+Slug(a.Name)), a.Name, stackTmpl.DisplayName)
 	}
 	fmt.Println()
+	if cfg.CLIPath != "" {
+		fmt.Printf("koor-cli: copied from %s into all workspaces\n", cfg.CLIPath)
+	} else {
+		fmt.Println("WARNING: koor-cli not found — agents will not be able to activate or use the data plane.")
+		fmt.Println("         Build it with: go build -o koor-cli ./cmd/koor-cli")
+		fmt.Println("         Then copy it into each workspace directory.")
+	}
+	fmt.Println()
 	fmt.Println("IDE support:")
 	fmt.Println("  Claude Code  — reads CLAUDE.md + .claude/mcp.json")
 	fmt.Println("  Cursor       — reads .cursorrules + .cursor/mcp.json")
@@ -302,11 +317,11 @@ func printNewProjectSuccess(cfg ProjectConfig) {
 	fmt.Println("  1. Start Koor server:     koor-server")
 	fmt.Printf("  2. Edit the master plan:  %s/plan/overview.md\n", filepath.Join(cfg.ParentDir, slug+"-controller"))
 	fmt.Printf("  3. Open %s-controller/ in your IDE\n", slug)
-	fmt.Println("     - The AI agent will read its rules and connect to Koor via MCP")
+	fmt.Println("     - The AI agent will register via MCP (pending), then activate via ./koor-cli (active)")
 	fmt.Println("     - Say \"setup agents\" to assign initial tasks")
 	for i, a := range cfg.Agents {
 		fmt.Printf("  %d. Open %s/ in your IDE\n", i+4, filepath.Join(cfg.ParentDir, slug+"-"+Slug(a.Name)))
-		fmt.Println("     - Say \"next\" to start working")
+		fmt.Println("     - Say \"next\" — agent registers, activates, and starts working")
 	}
 	fmt.Printf("\nDashboard: http://localhost:9847\n")
 }
@@ -314,12 +329,19 @@ func printNewProjectSuccess(cfg ProjectConfig) {
 func printAddAgentSuccess(cfg AgentConfig) {
 	fmt.Printf("\nAgent %q added to project %q!\n\n", cfg.AgentName, cfg.ProjectName)
 	fmt.Printf("Created: %s/\n\n", cfg.WorkspaceDir)
+	if cfg.CLIPath != "" {
+		fmt.Printf("koor-cli: copied from %s\n", cfg.CLIPath)
+	} else {
+		fmt.Println("WARNING: koor-cli not found — agent will not be able to activate or use the data plane.")
+		fmt.Println("         Copy koor-cli into the workspace directory before starting.")
+	}
+	fmt.Println()
 	fmt.Println("IDE support:")
 	fmt.Println("  Claude Code  — reads CLAUDE.md + .claude/mcp.json")
 	fmt.Println("  Cursor       — reads .cursorrules + .cursor/mcp.json")
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Printf("  1. Open %s/ in your IDE\n", cfg.WorkspaceDir)
-	fmt.Println("  2. Say \"next\" — the agent will register with Koor and check for tasks")
+	fmt.Println("  2. Say \"next\" — agent registers (pending), activates via ./koor-cli (active), checks tasks")
 	fmt.Println("  3. Go to the Controller and say \"status\" to see the new agent")
 }

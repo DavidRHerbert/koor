@@ -94,9 +94,10 @@ const controllerTemplate = `# {{.ProjectName}} Controller
 
 ## On Startup
 1. Register with Koor via MCP: ` + "`register_instance`" + ` with name={{.ProjectSlug}}-controller, stack=controller
-2. Read plan/overview.md — this is the master plan
-3. Check events: ` + "`koor-cli events history --last 20 --topic \"{{.TopicPrefix}}.*\"`" + `
-4. Check for pending requests: look for ` + "`{{.TopicPrefix}}.*.request`" + ` events
+2. Activate via CLI: ` + "`./koor-cli activate <your-instance-id>`" + ` (use the instance_id from step 1). If this fails, koor-cli is not available — tell the user immediately.
+3. Read plan/overview.md — this is the master plan
+4. Check events: ` + "`./koor-cli events history --last 20 --topic \"{{.TopicPrefix}}.*\"`" + `
+5. Check for pending requests: look for ` + "`{{.TopicPrefix}}.*.request`" + ` events
 
 ## Your Job
 You are the orchestrator for the **{{.ProjectName}}** project.
@@ -106,31 +107,31 @@ The plan files in this directory are the single source of truth.
 When assigning work to an agent:
 1. Write the task to Koor state:
 ` + "   ```" + `
-   koor-cli state set {{.ProjectName}}/{agent-name}-task --data '{"task":"description","priority":"high"}'
+   ./koor-cli state set {{.ProjectName}}/{agent-name}-task --data '{"task":"description","priority":"high"}'
 ` + "   ```" + `
 2. Publish an event so the agent knows:
 ` + "   ```" + `
-   koor-cli events publish {{.TopicPrefix}}.controller.assigned --data '{"agent":"{agent-name}","task":"description"}'
+   ./koor-cli events publish {{.TopicPrefix}}.controller.assigned --data '{"agent":"{agent-name}","task":"description"}'
 ` + "   ```" + `
 3. Tell the user: "Go to {agent-name} and say 'next'."
 
 ### Checking Requests
 When the user says "check requests":
-1. Read events: ` + "`koor-cli events history --last 20 --topic \"{{.TopicPrefix}}.*.request\"`" + `
+1. Read events: ` + "`./koor-cli events history --last 20 --topic \"{{.TopicPrefix}}.*.request\"`" + `
 2. Evaluate each request against plan/overview.md
 3. Ask the user: "Agent X wants Y. Approve? yes/no"
 4. If approved:
    - Update the plan if needed
    - Log decision in plan/decisions/
    - Write updated task to Koor state for the target agent
-   - Publish approval event: ` + "`koor-cli events publish {{.TopicPrefix}}.controller.approved --data '{...}'`" + `
+   - Publish approval event: ` + "`./koor-cli events publish {{.TopicPrefix}}.controller.approved --data '{...}'`" + `
    - Tell user: "Approved. Go to [agent] and say 'next'."
 
 ### Giving Status
 When the user says "status":
 1. Discover agents: use MCP ` + "`discover_instances`" + `
-2. Read each agent's state: ` + "`koor-cli state get {{.ProjectName}}/{agent}-task`" + `
-3. Read recent events: ` + "`koor-cli events history --last 20 --topic \"{{.TopicPrefix}}.*\"`" + `
+2. Read each agent's state: ` + "`./koor-cli state get {{.ProjectName}}/{agent}-task`" + `
+3. Read recent events: ` + "`./koor-cli events history --last 20 --topic \"{{.TopicPrefix}}.*\"`" + `
 4. Give the user a clear summary of progress
 
 ## Commands
@@ -154,10 +155,10 @@ When the user says "status":
 - NEVER ask the user to copy-paste content between windows
 
 ## Communication Patterns
-- **Assign task:** Write to Koor state key ` + "`{{.ProjectName}}/{agent}-task`" + `, then publish event
+- **Assign task:** Write to Koor state key ` + "`./koor-cli state set {{.ProjectName}}/{agent}-task`" + `, then publish event
 - **Read status:** Read Koor state + event history
-- **Approve request:** Publish ` + "`{{.TopicPrefix}}.controller.approved`" + ` event, update plan files
-- **Reject request:** Publish ` + "`{{.TopicPrefix}}.controller.rejected`" + ` event with reason
+- **Approve request:** ` + "`./koor-cli events publish {{.TopicPrefix}}.controller.approved`" + ` event, update plan files
+- **Reject request:** ` + "`./koor-cli events publish {{.TopicPrefix}}.controller.rejected`" + ` event with reason
 `
 
 const agentTemplate = `# {{.ProjectName}} — {{.AgentName}} Agent
@@ -170,23 +171,24 @@ const agentTemplate = `# {{.ProjectName}} — {{.AgentName}} Agent
 
 ## On Startup
 1. Register with Koor via MCP: ` + "`register_instance`" + ` with name={{.ProjectSlug}}-{{.AgentSlug}}, stack={{.Stack}}
-2. Check your task: ` + "`koor-cli state get {{.ProjectName}}/{{.AgentSlug}}-task`" + `
-3. Check recent events: ` + "`koor-cli events history --last 10 --topic \"{{.TopicPrefix}}.controller.*\"`" + `
-4. If you have a task, proceed. If not, tell the user you're waiting for assignment.
+2. Activate via CLI: ` + "`./koor-cli activate <your-instance-id>`" + ` (use the instance_id from step 1). If this fails, koor-cli is not available — tell the user immediately.
+3. Check your task: ` + "`./koor-cli state get {{.ProjectName}}/{{.AgentSlug}}-task`" + `
+4. Check recent events: ` + "`./koor-cli events history --last 10 --topic \"{{.TopicPrefix}}.controller.*\"`" + `
+5. If you have a task, proceed. If not, tell the user you're waiting for assignment.
 
 ## Your Job
 You are the **{{.AgentName}}** agent for the {{.ProjectName}} project.
 Your stack is **{{.StackDisplayName}}**.
 
 ### When the user says "next":
-1. Check Koor for your current task: ` + "`koor-cli state get {{.ProjectName}}/{{.AgentSlug}}-task`" + `
-2. Check for Controller approvals/rejections: ` + "`koor-cli events history --last 10 --topic \"{{.TopicPrefix}}.controller.*\"`" + `
+1. Check Koor for your current task: ` + "`./koor-cli state get {{.ProjectName}}/{{.AgentSlug}}-task`" + `
+2. Check for Controller approvals/rejections: ` + "`./koor-cli events history --last 10 --topic \"{{.TopicPrefix}}.controller.*\"`" + `
 3. Proceed with your task
 
 ### When you finish a feature:
 1. Publish a done event:
 ` + "   ```" + `
-   koor-cli events publish {{.TopicPrefix}}.{{.AgentSlug}}.done --data '{"feature":"what-you-completed","summary":"brief description"}'
+   ./koor-cli events publish {{.TopicPrefix}}.{{.AgentSlug}}.done --data '{"feature":"what-you-completed","summary":"brief description"}'
 ` + "   ```" + `
 2. Update your intent via MCP: ` + "`set_intent`" + ` with your next planned action
 3. Tell the user: "Done with [feature]. Go to Controller and say 'next'."
@@ -194,7 +196,7 @@ Your stack is **{{.StackDisplayName}}**.
 ### When you need something from another agent:
 1. Publish a request event:
 ` + "   ```" + `
-   koor-cli events publish {{.TopicPrefix}}.{{.AgentSlug}}.request --data '{"need":"what-you-need","reason":"why","from":"target-agent"}'
+   ./koor-cli events publish {{.TopicPrefix}}.{{.AgentSlug}}.request --data '{"need":"what-you-need","reason":"why","from":"target-agent"}'
 ` + "   ```" + `
 2. Tell the user: "I need [thing]. Go to Controller and say 'check requests'."
 3. DO NOT ask the user to paste your request. The Controller reads it from Koor.
@@ -232,8 +234,8 @@ Your stack is **{{.StackDisplayName}}**.
    - If a file path is outside your workspace, REFUSE the operation
 
 2. **ALL communication with other agents MUST go through Koor**
-   - Use ` + "`koor-cli events publish`" + ` to send messages
-   - Use ` + "`koor-cli state get`" + ` to read shared state
+   - Use ` + "`./koor-cli events publish`" + ` to send messages
+   - Use ` + "`./koor-cli state get`" + ` to read shared state
    - Use MCP ` + "`discover_instances`" + ` to find other agents
    - NEVER write to another agent's files
 
@@ -254,11 +256,11 @@ Your stack is **{{.StackDisplayName}}**.
    - Wait for approval before proceeding
 
 ## Communication Patterns
-- **Report completion:** ` + "`koor-cli events publish {{.TopicPrefix}}.{{.AgentSlug}}.done --data '{\"feature\":\"...\"}'`" + `
-- **Request something:** ` + "`koor-cli events publish {{.TopicPrefix}}.{{.AgentSlug}}.request --data '{\"need\":\"...\",\"from\":\"...\"}'`" + `
-- **Read your task:** ` + "`koor-cli state get {{.ProjectName}}/{{.AgentSlug}}-task`" + `
-- **Read shared state:** ` + "`koor-cli state get {{.ProjectName}}/{key}`" + `
-- **Check events:** ` + "`koor-cli events history --last 10 --topic \"{{.TopicPrefix}}.*\"`" + `
+- **Report completion:** ` + "`./koor-cli events publish {{.TopicPrefix}}.{{.AgentSlug}}.done --data '{\"feature\":\"...\"}'`" + `
+- **Request something:** ` + "`./koor-cli events publish {{.TopicPrefix}}.{{.AgentSlug}}.request --data '{\"need\":\"...\",\"from\":\"...\"}'`" + `
+- **Read your task:** ` + "`./koor-cli state get {{.ProjectName}}/{{.AgentSlug}}-task`" + `
+- **Read shared state:** ` + "`./koor-cli state get {{.ProjectName}}/{key}`" + `
+- **Check events:** ` + "`./koor-cli events history --last 10 --topic \"{{.TopicPrefix}}.*\"`" + `
 `
 
 const overviewTemplate = `# {{.ProjectName}} — Master Plan
@@ -275,5 +277,5 @@ const overviewTemplate = `# {{.ProjectName}} — Master Plan
 
 ## API Contract
 <!-- Define the shared API contract here, or use Koor specs to store it -->
-<!-- koor-cli contract set {{.ProjectName}}/api-contract --file contract.json -->
+<!-- ./koor-cli contract set {{.ProjectName}}/api-contract --file contract.json -->
 `

@@ -407,6 +407,98 @@ func TestInstanceDeregister(t *testing.T) {
 	}
 }
 
+func registerInstance(t *testing.T, tsURL, name string) string {
+	t.Helper()
+	req, _ := http.NewRequest("POST", tsURL+"/api/instances/register",
+		strings.NewReader(fmt.Sprintf(`{"name":%q}`, name)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var result struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(body, &result)
+	return result.ID
+}
+
+func TestInstanceActivate(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Register — should be pending.
+	id := registerInstance(t, ts.URL, "activate-test")
+
+	resp, _ := http.Get(ts.URL + "/api/instances/" + id)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"status":"pending"`) {
+		t.Errorf("expected pending status: %s", body)
+	}
+
+	// Activate.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/instances/"+id+"/activate", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("activate: expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), `"status":"active"`) {
+		t.Errorf("activate response should contain active status: %s", body)
+	}
+
+	// Verify via GET.
+	resp, _ = http.Get(ts.URL + "/api/instances/" + id)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"status":"active"`) {
+		t.Errorf("get after activate should show active: %s", body)
+	}
+}
+
+func TestInstanceActivateNotFound(t *testing.T) {
+	ts := testServer(t, "")
+	req, _ := http.NewRequest("POST", ts.URL+"/api/instances/nonexistent/activate", nil)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestInstanceListShowsStatus(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Register two.
+	id1 := registerInstance(t, ts.URL, "agent-pending")
+	id2 := registerInstance(t, ts.URL, "agent-active")
+
+	// Activate one.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/instances/"+id2+"/activate", nil)
+	http.DefaultClient.Do(req)
+
+	// List.
+	resp, _ := http.Get(ts.URL + "/api/instances")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	bodyStr := string(body)
+	_ = id1 // used for registration
+
+	if !strings.Contains(bodyStr, `"status":"pending"`) {
+		t.Errorf("list should contain pending status: %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"status":"active"`) {
+		t.Errorf("list should contain active status: %s", bodyStr)
+	}
+}
+
 func TestValidateRulesRoundTrip(t *testing.T) {
 	ts := testServer(t, "")
 

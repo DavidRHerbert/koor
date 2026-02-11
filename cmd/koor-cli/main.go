@@ -56,6 +56,9 @@ func main() {
 	case "register":
 		cfg := loadConfig()
 		handleRegister(cfg, os.Args[2:])
+	case "activate":
+		cfg := loadConfig()
+		handleActivate(cfg, os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -101,6 +104,7 @@ Commands:
   restore --file <path>          Restore data from backup file
 
   register <name> [--workspace <path>] [--intent <text>]   Register this agent
+  activate <instance-id>         Activate agent (confirms CLI connectivity)
   instances list                 List registered instances
   instances get <id>             Get instance details
 
@@ -510,6 +514,20 @@ func handleRegister(cfg *config, args []string) {
 
 	payload := fmt.Sprintf(`{"name":%q,"workspace":%q,"intent":%q}`, name, workspace, intent)
 	resp, err := doRequest(cfg, "POST", "/api/instances/register", strings.NewReader(payload))
+	if err != nil {
+		fatal(err)
+	}
+	defer resp.Body.Close()
+	printResponse(resp)
+}
+
+func handleActivate(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli activate <instance-id>")
+		os.Exit(1)
+	}
+	id := args[0]
+	resp, err := doRequest(cfg, "POST", "/api/instances/"+id+"/activate", nil)
 	if err != nil {
 		fatal(err)
 	}

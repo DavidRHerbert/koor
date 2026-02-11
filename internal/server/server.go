@@ -101,6 +101,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/instances", s.countREST(s.handleInstancesList))
 	mux.HandleFunc("GET /api/instances/{id}", s.countREST(s.handleInstanceGet))
 	mux.HandleFunc("POST /api/instances/register", s.countREST(s.handleInstanceRegister))
+	mux.HandleFunc("POST /api/instances/{id}/activate", s.countREST(s.handleInstanceActivate))
 	mux.HandleFunc("POST /api/instances/{id}/heartbeat", s.countREST(s.handleInstanceHeartbeat))
 	mux.HandleFunc("DELETE /api/instances/{id}", s.countREST(s.handleInstanceDeregister))
 
@@ -512,6 +513,7 @@ func (s *Server) handleInstanceGet(w http.ResponseWriter, r *http.Request) {
 		Workspace:    inst.Workspace,
 		Intent:       inst.Intent,
 		Stack:        inst.Stack,
+		Status:       inst.Status,
 		RegisteredAt: inst.RegisteredAt,
 		LastSeen:     inst.LastSeen,
 	})
@@ -542,6 +544,24 @@ func (s *Server) handleInstanceRegister(w http.ResponseWriter, r *http.Request) 
 
 	s.logger.Info("instance registered", "id", inst.ID, "name", inst.Name)
 	writeJSON(w, http.StatusOK, inst)
+}
+
+func (s *Server) handleInstanceActivate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	err := s.instanceReg.Activate(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "instance not found: "+id)
+		return
+	}
+	if err != nil {
+		s.logger.Error("instance activate failed", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to activate")
+		return
+	}
+
+	s.logger.Info("instance activated", "id", id)
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "active"})
 }
 
 func (s *Server) handleInstanceHeartbeat(w http.ResponseWriter, r *http.Request) {

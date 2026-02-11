@@ -57,6 +57,9 @@ func TestControllerCLAUDEMD(t *testing.T) {
 		"NEVER read or modify files in agent workspace directories",
 		"setup agents",
 		"check requests",
+		"./koor-cli activate",
+		"./koor-cli events history",
+		"./koor-cli state set",
 	}
 	for _, want := range checks {
 		if !strings.Contains(content, want) {
@@ -106,6 +109,9 @@ func TestAgentCLAUDEMD(t *testing.T) {
 		"go run ./cmd/server",
 		"Use templ for all HTML templates",
 		"Use HTMX for interactivity",
+		"./koor-cli activate",
+		"./koor-cli state get",
+		"./koor-cli events publish",
 	}
 	for _, want := range checks {
 		if !strings.Contains(content, want) {
@@ -366,6 +372,81 @@ func TestSlug(t *testing.T) {
 		got := Slug(tc.input)
 		if got != tc.want {
 			t.Errorf("Slug(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestCopyCLI(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+
+	// Create a fake koor-cli binary.
+	srcPath := filepath.Join(srcDir, cliName())
+	fakeContent := []byte("fake-koor-cli-binary-content")
+	if err := os.WriteFile(srcPath, fakeContent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	destPath, err := CopyCLI(srcPath, destDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify destination exists and has correct content.
+	got, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(fakeContent) {
+		t.Errorf("copied content mismatch: got %q, want %q", got, fakeContent)
+	}
+
+	// Verify filename.
+	if filepath.Base(destPath) != cliName() {
+		t.Errorf("expected %s, got %s", cliName(), filepath.Base(destPath))
+	}
+}
+
+func TestScaffoldProjectWithCLI(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a fake koor-cli binary.
+	fakeCLI := filepath.Join(dir, cliName())
+	if err := os.WriteFile(fakeCLI, []byte("fake-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := ProjectConfig{
+		ProjectName: "CLI-Test",
+		ServerURL:   "http://localhost:9800",
+		ParentDir:   dir,
+		CLIPath:     fakeCLI,
+		Agents: []AgentInfo{
+			{Name: "frontend", Stack: "goth"},
+			{Name: "backend", Stack: "go-api"},
+		},
+	}
+
+	if err := ScaffoldProject(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify koor-cli was copied to controller and all agent dirs.
+	slug := Slug(cfg.ProjectName)
+	checkDirs := []string{
+		filepath.Join(dir, slug+"-controller"),
+		filepath.Join(dir, slug+"-frontend"),
+		filepath.Join(dir, slug+"-backend"),
+	}
+	for _, d := range checkDirs {
+		cliPath := filepath.Join(d, cliName())
+		content, err := os.ReadFile(cliPath)
+		if err != nil {
+			t.Errorf("koor-cli not found in %s: %v", d, err)
+			continue
+		}
+		if string(content) != "fake-binary" {
+			t.Errorf("koor-cli content mismatch in %s", d)
 		}
 	}
 }

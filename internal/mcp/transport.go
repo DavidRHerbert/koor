@@ -150,8 +150,9 @@ func (t *Transport) handleRegisterInstance(ctx context.Context, req mcplib.CallT
 		"workspace":     inst.Workspace,
 		"intent":        inst.Intent,
 		"stack":         inst.Stack,
+		"status":        inst.Status,
 		"registered_at": inst.RegisteredAt,
-		"message":       "Registered successfully. Use the token for authenticated requests. Use REST API or koor-cli for data operations.",
+		"message":       "Registered (status: pending). Activate via CLI: ./koor-cli activate " + inst.ID,
 	}, "", "  ")
 
 	return mcplib.NewToolResultText(string(data)), nil
@@ -220,14 +221,15 @@ func (t *Transport) handleGetEndpoints(ctx context.Context, req mcplib.CallToolR
 			"events_ws":      "GET /api/events/subscribe",
 			"instances_list": "GET /api/instances",
 			"instance_get":   "GET /api/instances/{id}",
-			"rules_export":   "GET /api/rules/export",
-			"rules_import":   "POST /api/rules/import",
+			"rules_export":      "GET /api/rules/export",
+			"rules_import":      "POST /api/rules/import",
+			"instance_activate": "POST /api/instances/{id}/activate",
 		},
 		"cli": map[string]string{
 			"install": "go install github.com/DavidRHerbert/koor/cmd/koor-cli@latest",
 			"usage":   "koor-cli --help",
 		},
-		"message": "Use these REST endpoints or koor-cli for data operations. MCP is for discovery and rule proposals only.",
+		"message": "Use these REST endpoints or ./koor-cli for data operations. MCP is for discovery and rule proposals only. Activate your instance first: ./koor-cli activate <instance-id>",
 	}, "", "  ")
 
 	return mcplib.NewToolResultText(string(data)), nil

@@ -206,3 +206,96 @@ func TestGetNotFound(t *testing.T) {
 		t.Errorf("expected ErrNoRows, got %v", err)
 	}
 }
+
+func TestRegisterSetsStatusPending(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	inst, err := reg.Register(ctx, "test-agent", "/ws", "building", "goth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.Status != "pending" {
+		t.Errorf("expected status pending, got %s", inst.Status)
+	}
+
+	got, _ := reg.Get(ctx, inst.ID)
+	if got.Status != "pending" {
+		t.Errorf("Get: expected status pending, got %s", got.Status)
+	}
+}
+
+func TestActivate(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	inst, _ := reg.Register(ctx, "test-agent", "/ws", "", "")
+	if inst.Status != "pending" {
+		t.Fatalf("expected pending, got %s", inst.Status)
+	}
+
+	err := reg.Activate(ctx, inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := reg.Get(ctx, inst.ID)
+	if got.Status != "active" {
+		t.Errorf("expected status active, got %s", got.Status)
+	}
+}
+
+func TestActivateIdempotent(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	inst, _ := reg.Register(ctx, "test-agent", "", "", "")
+	reg.Activate(ctx, inst.ID)
+	err := reg.Activate(ctx, inst.ID)
+	if err != nil {
+		t.Errorf("second activate should succeed, got %v", err)
+	}
+
+	got, _ := reg.Get(ctx, inst.ID)
+	if got.Status != "active" {
+		t.Errorf("expected active, got %s", got.Status)
+	}
+}
+
+func TestActivateNotFound(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	err := reg.Activate(ctx, "nonexistent")
+	if err != sql.ErrNoRows {
+		t.Errorf("expected ErrNoRows, got %v", err)
+	}
+}
+
+func TestListIncludesStatus(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	inst1, _ := reg.Register(ctx, "agent-a", "", "", "")
+	inst2, _ := reg.Register(ctx, "agent-b", "", "", "")
+	reg.Activate(ctx, inst2.ID)
+
+	items, err := reg.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2, got %d", len(items))
+	}
+
+	statusMap := map[string]string{}
+	for _, item := range items {
+		statusMap[item.ID] = item.Status
+	}
+	if statusMap[inst1.ID] != "pending" {
+		t.Errorf("agent-a expected pending, got %s", statusMap[inst1.ID])
+	}
+	if statusMap[inst2.ID] != "active" {
+		t.Errorf("agent-b expected active, got %s", statusMap[inst2.ID])
+	}
+}
