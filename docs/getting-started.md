@@ -37,14 +37,14 @@ Both binaries are self-contained with zero external runtime dependencies. The da
 Output:
 
 ```
-time=2026-02-09T14:00:00.000Z level=INFO msg="koor server starting" api=localhost:9800 dashboard=localhost:9847 data_dir=/home/user/.koor auth=false
+time=2026-02-09T14:00:00.000Z level=INFO msg="koor server starting" api=localhost:9800 dashboard=localhost:9847 data_dir=. auth=false
 ```
 
 The server is now listening on two ports:
 - **API:** `localhost:9800` (REST + MCP)
 - **Dashboard:** `localhost:9847` (web UI)
 
-Data is stored in `~/.koor/data.db` (SQLite, WAL mode).
+Data is stored in `./data.db` (SQLite, WAL mode).
 
 ## First Commands
 

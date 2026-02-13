@@ -111,7 +111,7 @@ koor-server (single binary)
 
 ```
 koor-cli (single binary)
-├── Config management (~/.koor/config.toml)
+├── Config management (./settings.json)
 ├── HTTP client (REST API calls)
 └── Polling event subscriber (fallback)
 ```

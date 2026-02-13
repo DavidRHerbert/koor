@@ -88,19 +88,6 @@ async function refreshTokenTax() {
   `;
 }
 
-async function refreshMetrics() {
-  const data = await fetchJSON('/api/metrics');
-  const el = document.getElementById('metrics-info');
-
-  if (!data) {
-    el.innerHTML = '<p class="empty">No metrics available</p>';
-    return;
-  }
-
-  const pairs = Object.entries(data).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : v]);
-  el.innerHTML = renderTable(pairs);
-}
-
 async function refreshInstances() {
   const data = await fetchJSON('/api/instances');
   const el = document.getElementById('instances-info');
@@ -162,12 +149,17 @@ async function refresh() {
   await Promise.all([
     refreshTokenTax(),
     refreshHealth(),
-    refreshMetrics(),
     refreshInstances(),
     refreshState(),
     refreshEvents(),
   ]);
 }
+
+// Reset token tax counters.
+document.getElementById('tt-reset').addEventListener('click', async () => {
+  await fetch(API_BASE + '/api/metrics/reset', { method: 'POST' });
+  refresh();
+});
 
 // Initial load + poll every 5 seconds.
 refresh();

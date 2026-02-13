@@ -12,7 +12,7 @@ The simplest setup. No configuration needed.
 
 - API: `localhost:9800`
 - Dashboard: `localhost:9847`
-- Data: `~/.koor/data.db`
+- Data: `./data.db`
 - Auth: disabled
 
 All agents and tools run on the same machine and connect to `localhost`. This is the default for solo development.
@@ -154,8 +154,8 @@ The database is a single SQLite file at `{data_dir}/data.db`. To back up:
 
 ```bash
 # While the server is running (WAL mode supports hot backups):
-cp ~/.koor/data.db ~/.koor/data.db.backup
-cp ~/.koor/data.db-wal ~/.koor/data.db-wal.backup
+cp ./data.db ./data.db.backup
+cp ./data.db-wal ./data.db-wal.backup
 ```
 
 Or stop the server and copy `data.db` alone (the WAL is merged on clean shutdown).

@@ -29,6 +29,7 @@ type agentData struct {
 	AgentSlug        string
 	Stack            string
 	StackDisplayName string
+	DBType           string // "sqlite", "postgres", "memory" — only for go-api stack
 	ServerURL        string
 	TopicPrefix      string
 	WorkspaceDir     string

@@ -8,6 +8,9 @@
 
 # Data directory
 .koor/
+data.db
+data.db-wal
+data.db-shm
 
 # IDE / tools
 .idea/

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -21,7 +20,7 @@ import (
 	"github.com/DavidRHerbert/koor/internal/state"
 )
 
-// fileConfig mirrors the JSON structure in koor.config.json.
+// fileConfig mirrors the JSON structure in settings.json.
 type fileConfig struct {
 	Bind          string `json:"bind"`
 	DashboardBind string `json:"dashboard_bind"`
@@ -31,8 +30,7 @@ type fileConfig struct {
 }
 
 func main() {
-	home, _ := os.UserHomeDir()
-	defaultDataDir := filepath.Join(home, ".koor")
+	defaultDataDir := "."
 
 	// 1. Load config file (base layer).
 	fc := loadConfigFile(defaultDataDir)
@@ -40,10 +38,10 @@ func main() {
 	// 2. Register flags with config-file values as defaults.
 	bind := flag.String("bind", fc.Bind, "API listen address")
 	dashBind := flag.String("dashboard-bind", fc.DashboardBind, "dashboard listen address (empty = disabled)")
-	dataDir := flag.String("data-dir", fc.DataDir, "SQLite and config directory")
+	dataDir := flag.String("data-dir", fc.DataDir, "SQLite database directory (default: current directory)")
 	authToken := flag.String("auth-token", fc.AuthToken, "bearer token (empty = no auth)")
 	logLevel := flag.String("log-level", fc.LogLevel, "log level: debug|info|warn|error")
-	configFile := flag.String("config", "", "path to config file (default: ./koor.config.json)")
+	configFile := flag.String("config", "", "path to config file (default: ./settings.json)")
 	flag.Parse()
 
 	// If --config was explicitly provided, reload from that path.
@@ -127,15 +125,10 @@ func main() {
 	}
 }
 
-// loadConfigFile tries ./koor.config.json, then ~/.koor/koor.config.json.
+// loadConfigFile tries ./settings.json.
 func loadConfigFile(defaultDataDir string) fileConfig {
-	for _, path := range []string{
-		"koor.config.json",
-		filepath.Join(defaultDataDir, "koor.config.json"),
-	} {
-		if fc, ok := readConfigFile(path, defaultDataDir); ok {
-			return fc
-		}
+	if fc, ok := readConfigFile("settings.json", defaultDataDir); ok {
+		return fc
 	}
 	return defaults(defaultDataDir)
 }

@@ -57,8 +57,8 @@ Another process is using port 9800 or 9847.
 The data directory doesn't exist or isn't writable.
 
 **Fix:**
-- Check the data directory: `ls -la ~/.koor/`
-- Create it: `mkdir -p ~/.koor`
+- Check the data directory: `ls -la .`
+- Ensure the current directory is writable
 - Check permissions: the server needs read/write access
 - Try a different directory: `./koor-server --data-dir /tmp/koor`
 

@@ -94,11 +94,14 @@ Add to your MCP settings (`.claude/settings.json` or via Claude Code MCP config)
 {
   "mcpServers": {
     "koor": {
+      "type": "http",
       "url": "http://localhost:9800/mcp"
     }
   }
 }
 ```
+
+> **Important:** The `"type": "http"` field is required for Claude Code to connect via StreamableHTTP transport. Without it, the MCP connection will silently fail.
 
 ### Cursor
 
@@ -108,6 +111,7 @@ Add to `.cursor/mcp.json` in your workspace:
 {
   "mcpServers": {
     "koor": {
+      "type": "http",
       "url": "http://localhost:9800/mcp"
     }
   }
@@ -151,6 +155,7 @@ When the server runs with `--auth-token`, the MCP endpoint is protected by the s
 {
   "mcpServers": {
     "koor": {
+      "type": "http",
       "url": "http://localhost:9800/mcp",
       "headers": {
         "Authorization": "Bearer secret123"

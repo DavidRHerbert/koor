@@ -4,11 +4,13 @@
 
 ## Configuration
 
-The CLI uses a simple TOML-format config file at `~/.koor/config.toml`:
+The CLI uses a JSON config file at `./settings.json`:
 
-```toml
-server = "http://localhost:9800"
-token = "my-secret-token"
+```json
+{
+  "server": "http://localhost:9800",
+  "token": "my-secret-token"
+}
 ```
 
 ### Setting Configuration

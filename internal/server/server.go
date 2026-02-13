@@ -59,10 +59,17 @@ func New(cfg Config, stateStore *state.Store, specReg *specs.Registry, eventBus 
 	}
 }
 
+type ctxKey string
+
+const dashboardKey ctxKey = "dashboard"
+
 // countREST wraps a handler to count REST/CLI calls.
+// Requests from the dashboard proxy are excluded (they carry the dashboardKey context value).
 func (s *Server) countREST(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		s.restCalls.Add(1)
+		if r.Context().Value(dashboardKey) == nil {
+			s.restCalls.Add(1)
+		}
 		next(w, r)
 	}
 }
@@ -121,8 +128,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/rules/export", s.countREST(s.handleRulesExport))
 	mux.HandleFunc("POST /api/rules/import", s.countREST(s.handleRulesImport))
 
-	// Metrics endpoint (NOT counted — infrastructure, not agent calls).
+	// Metrics endpoints (NOT counted — infrastructure, not agent calls).
 	mux.HandleFunc("GET /api/metrics", s.handleMetrics)
+	mux.HandleFunc("POST /api/metrics/reset", s.handleMetricsReset)
 
 	// MCP endpoint (StreamableHTTP) — counted as MCP calls.
 	if s.mcpHandler != nil {
@@ -143,6 +151,7 @@ func (s *Server) DashboardHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /api/", s.dashboardProxy)
+	mux.HandleFunc("POST /api/metrics/reset", s.dashboardProxy)
 
 	// Dashboard rules HTMX routes.
 	mux.HandleFunc("GET /rules", s.handleDashboardRules)
@@ -211,9 +220,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 // dashboardProxy forwards API requests from the dashboard port to the API handlers.
 // This avoids CORS issues since the dashboard and API are on different ports.
+// It marks the request so countREST skips it (dashboard polling is infrastructure, not agent calls).
 func (s *Server) dashboardProxy(w http.ResponseWriter, r *http.Request) {
-	// Re-dispatch through the API handler.
-	s.Handler().ServeHTTP(w, r)
+	ctx := context.WithValue(r.Context(), dashboardKey, true)
+	s.Handler().ServeHTTP(w, r.WithContext(ctx))
 }
 
 // --- Health ---
@@ -962,6 +972,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			"savings_percent":      savingsPercent,
 		},
 	})
+}
+
+func (s *Server) handleMetricsReset(w http.ResponseWriter, r *http.Request) {
+	s.mcpCalls.Store(0)
+	s.restCalls.Store(0)
+	writeJSON(w, http.StatusOK, map[string]any{"reset": true})
 }
 
 // --- Dashboard HTMX handlers ---

@@ -92,7 +92,8 @@ So why copy a binary instead?
 | **"no"** | Controller | Reject the request |
 | **"check requests"** | Controller | Look at pending requests in Koor events |
 | **"status"** | Controller | Give me an overview of where everything stands |
-
+ format = koor-cli status
+ 
 Six words to set up and run a multi-agent project.
 
 ### What Koor Provides

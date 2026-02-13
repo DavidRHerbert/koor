@@ -11,7 +11,8 @@ type mcpConfig struct {
 }
 
 type mcpServerEntry struct {
-	URL string `json:"url"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
 }
 
 // GenerateMCPJSON returns the bytes for .claude/mcp.json.
@@ -19,7 +20,8 @@ func GenerateMCPJSON(serverURL string) ([]byte, error) {
 	cfg := mcpConfig{
 		MCPServers: map[string]mcpServerEntry{
 			"koor": {
-				URL: strings.TrimRight(serverURL, "/") + "/mcp",
+				Type: "http",
+				URL:  strings.TrimRight(serverURL, "/") + "/mcp",
 			},
 		},
 	}

@@ -112,12 +112,28 @@ var Registry = map[string]StackTemplate{
 	},
 }
 
-// StackIDs returns all registered stack IDs sorted alphabetically.
+// StackIDs returns all registered stack IDs with pinned stacks first, rest sorted alphabetically.
 func StackIDs() []string {
+	pinned := []string{"goth", "go-api"}
+
+	pinnedSet := map[string]bool{}
+	for _, id := range pinned {
+		pinnedSet[id] = true
+	}
+
 	ids := make([]string, 0, len(Registry))
 	for id := range Registry {
-		ids = append(ids, id)
+		if !pinnedSet[id] {
+			ids = append(ids, id)
+		}
 	}
 	sort.Strings(ids)
-	return ids
+
+	result := make([]string, 0, len(Registry))
+	for _, id := range pinned {
+		if _, ok := Registry[id]; ok {
+			result = append(result, id)
+		}
+	}
+	return append(result, ids...)
 }

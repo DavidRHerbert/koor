@@ -47,9 +47,9 @@ func Run(opts Options) error {
 func runNewProject(opts Options) error {
 	var (
 		projectName string
-		serverURL   = "http://localhost:9800"
-		parentDir   = "."
-		agentCount  int
+		serverURL  = "http://localhost:9800"
+		parentDir  string
+		agentCount int
 	)
 
 	// Phase 1: project basics + agent count.
@@ -89,9 +89,14 @@ func runNewProject(opts Options) error {
 		return err
 	}
 
+	// Default parent directory to current directory if left blank.
+	if strings.TrimSpace(parentDir) == "" {
+		parentDir = "."
+	}
+
 	// Phase 2: dynamic agent groups.
 	agents := make([]AgentInfo, agentCount)
-	groups := make([]*huh.Group, 0, agentCount+1)
+	groups := make([]*huh.Group, 0, agentCount)
 	for i := range agents {
 		idx := i
 		groups = append(groups, huh.NewGroup(
@@ -108,18 +113,46 @@ func runNewProject(opts Options) error {
 		))
 	}
 
-	// Summary + confirm group.
-	var confirmed bool
-	groups = append(groups, huh.NewGroup(
-		huh.NewConfirm().
-			Title(buildNewProjectSummary(projectName, serverURL, parentDir, agents)).
-			Affirmative("Yes, create it").
-			Negative("Cancel").
-			Value(&confirmed),
-	))
-
 	phase2 := huh.NewForm(groups...).WithAccessible(opts.Accessible)
 	if err := phase2.Run(); err != nil {
+		return err
+	}
+
+	// Phase 2.5: DB type follow-up for go-api agents.
+	for i := range agents {
+		if agents[i].Stack == "go-api" {
+			agents[i].DBType = "sqlite"
+			dbForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title(fmt.Sprintf("Database for %q agent", agents[i].Name)).
+						Description("Choose the database backend for this Go REST API").
+						Options(
+							huh.NewOption("SQLite (modernc.org/sqlite)", "sqlite"),
+							huh.NewOption("PostgreSQL", "postgres"),
+							huh.NewOption("In-memory (no database)", "memory"),
+						).
+						Value(&agents[i].DBType),
+				),
+			).WithAccessible(opts.Accessible)
+			if err := dbForm.Run(); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Phase 3: Confirm.
+	var confirmed bool
+	confirmForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(buildNewProjectSummary(projectName, serverURL, parentDir, agents)).
+				Affirmative("Yes, create it").
+				Negative("Cancel").
+				Value(&confirmed),
+		),
+	).WithAccessible(opts.Accessible)
+	if err := confirmForm.Run(); err != nil {
 		return err
 	}
 
@@ -195,6 +228,28 @@ func runAddAgent(opts Options) error {
 		workspaceDir = "./" + Slug(projectName) + "-" + Slug(agentName)
 	}
 
+	// DB type follow-up for go-api stack.
+	var agentDBType string
+	if agentStack == "go-api" {
+		agentDBType = "sqlite"
+		dbForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Database type").
+					Description("Choose the database backend for this Go REST API").
+					Options(
+						huh.NewOption("SQLite (modernc.org/sqlite)", "sqlite"),
+						huh.NewOption("PostgreSQL", "postgres"),
+						huh.NewOption("In-memory (no database)", "memory"),
+					).
+					Value(&agentDBType),
+			),
+		).WithAccessible(opts.Accessible)
+		if err := dbForm.Run(); err != nil {
+			return err
+		}
+	}
+
 	var confirmed bool
 	confirmForm := huh.NewForm(
 		huh.NewGroup(
@@ -221,6 +276,7 @@ func runAddAgent(opts Options) error {
 		ProjectName:  projectName,
 		AgentName:    agentName,
 		Stack:        agentStack,
+		DBType:       agentDBType,
 		ServerURL:    serverURL,
 		WorkspaceDir: workspaceDir,
 		CLIPath:      cliPath,
@@ -275,7 +331,11 @@ func buildNewProjectSummary(projectName, serverURL, parentDir string, agents []A
 	b.WriteString(fmt.Sprintf("  Controller: %s\n", filepath.Join(parentDir, slug+"-controller")))
 	for _, a := range agents {
 		stackTmpl := Registry[a.Stack]
-		b.WriteString(fmt.Sprintf("  Agent:      %s (%s) → %s\n", a.Name, stackTmpl.DisplayName, filepath.Join(parentDir, slug+"-"+Slug(a.Name))))
+		dbInfo := ""
+		if a.DBType != "" && a.Stack == "go-api" {
+			dbInfo = fmt.Sprintf(", db: %s", a.DBType)
+		}
+		b.WriteString(fmt.Sprintf("  Agent:      %s (%s%s) → %s\n", a.Name, stackTmpl.DisplayName, dbInfo, filepath.Join(parentDir, slug+"-"+Slug(a.Name))))
 	}
 	return b.String()
 }

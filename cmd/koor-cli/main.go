@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -119,8 +117,7 @@ Environment:
 // --- Config management ---
 
 func configPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".koor", "config.toml")
+	return "settings.json"
 }
 
 func loadConfig() *config {
@@ -137,37 +134,24 @@ func loadConfig() *config {
 	}
 
 	// Load config file for any values not set by env.
-	f, err := os.Open(configPath())
+	data, err := os.ReadFile(configPath())
 	if err != nil {
 		return cfg
 	}
-	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
-		// Remove surrounding quotes if present.
-		val = strings.Trim(val, `"'`)
+	var fileCfg struct {
+		Server string `json:"server"`
+		Token  string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &fileCfg); err != nil {
+		return cfg
+	}
 
-		switch key {
-		case "server":
-			if os.Getenv("KOOR_SERVER") == "" {
-				cfg.Server = val
-			}
-		case "token":
-			if os.Getenv("KOOR_TOKEN") == "" {
-				cfg.Token = val
-			}
-		}
+	if os.Getenv("KOOR_SERVER") == "" && fileCfg.Server != "" {
+		cfg.Server = fileCfg.Server
+	}
+	if os.Getenv("KOOR_TOKEN") == "" && fileCfg.Token != "" {
+		cfg.Token = fileCfg.Token
 	}
 
 	return cfg
@@ -186,29 +170,21 @@ func handleConfig(args []string) {
 		os.Exit(1)
 	}
 
-	// Read existing config.
-	cfg := loadConfig()
-	switch key {
-	case "server":
-		cfg.Server = value
-	case "token":
-		cfg.Token = value
+	// Read existing config file to preserve other keys.
+	existing := map[string]any{}
+	if data, err := os.ReadFile(configPath()); err == nil {
+		json.Unmarshal(data, &existing)
 	}
 
-	// Write config file.
-	path := configPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		fmt.Fprintf(os.Stderr, "error creating config dir: %v\n", err)
+	existing[key] = value
+
+	data, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error encoding config: %v\n", err)
 		os.Exit(1)
 	}
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("server = %q\n", cfg.Server))
-	if cfg.Token != "" {
-		sb.WriteString(fmt.Sprintf("token = %q\n", cfg.Token))
-	}
-
-	if err := os.WriteFile(path, []byte(sb.String()), 0o600); err != nil {
+	if err := os.WriteFile(configPath(), data, 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "error writing config: %v\n", err)
 		os.Exit(1)
 	}

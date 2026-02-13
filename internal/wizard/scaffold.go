@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ type AgentConfig struct {
 	ProjectName  string
 	AgentName    string
 	Stack        string
+	DBType       string // "sqlite", "postgres", "memory" — only for go-api stack
 	ServerURL    string
 	WorkspaceDir string
 	CLIPath      string // path to koor-cli binary (empty = skip copy)
@@ -30,8 +32,9 @@ type AgentConfig struct {
 
 // AgentInfo is the per-agent data collected during the wizard.
 type AgentInfo struct {
-	Name  string
-	Stack string
+	Name   string
+	Stack  string
+	DBType string // "sqlite", "postgres", "memory" — only for go-api stack
 }
 
 // ScaffoldProject creates the full project directory structure:
@@ -64,6 +67,7 @@ func ScaffoldProject(cfg ProjectConfig) error {
 			ProjectName:  cfg.ProjectName,
 			AgentName:    a.Name,
 			Stack:        a.Stack,
+			DBType:       a.DBType,
 			ServerURL:    cfg.ServerURL,
 			WorkspaceDir: agentDir,
 			CLIPath:      cfg.CLIPath,
@@ -177,6 +181,12 @@ func ScaffoldAgent(cfg AgentConfig) error {
 		stackTmpl = Registry["generic"]
 	}
 
+	// Customize instructions for go-api based on DB type.
+	instructions := stackTmpl.Instructions
+	if cfg.Stack == "go-api" && cfg.DBType != "" {
+		instructions = dbInstructions(cfg.DBType)
+	}
+
 	slug := Slug(cfg.ProjectName)
 	agentSlug := Slug(cfg.AgentName)
 
@@ -188,10 +198,11 @@ func ScaffoldAgent(cfg AgentConfig) error {
 		AgentSlug:        agentSlug,
 		Stack:            cfg.Stack,
 		StackDisplayName: stackTmpl.DisplayName,
+		DBType:           cfg.DBType,
 		ServerURL:        cfg.ServerURL,
 		TopicPrefix:      slug,
 		WorkspaceDir:     cfg.WorkspaceDir,
-		Instructions:     stackTmpl.Instructions,
+		Instructions:     instructions,
 		BuildCmd:         stackTmpl.BuildCmd,
 		TestCmd:          stackTmpl.TestCmd,
 		DevCmd:           stackTmpl.DevCmd,
@@ -208,6 +219,17 @@ func ScaffoldAgent(cfg AgentConfig) error {
 		return fmt.Errorf("write .cursorrules: %w", err)
 	}
 
+	// Write settings.json for Go app stacks.
+	if cfg.Stack == "goth" || cfg.Stack == "go-api" {
+		settingsData, err := generateSettingsJSON(cfg.Stack, cfg.DBType)
+		if err != nil {
+			return fmt.Errorf("generate settings.json: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(cfg.WorkspaceDir, "settings.json"), settingsData, 0o644); err != nil {
+			return fmt.Errorf("write settings.json: %w", err)
+		}
+	}
+
 	// Copy koor-cli into agent workspace if available.
 	if cfg.CLIPath != "" {
 		if _, err := CopyCLI(cfg.CLIPath, cfg.WorkspaceDir); err != nil {
@@ -216,6 +238,40 @@ func ScaffoldAgent(cfg AgentConfig) error {
 	}
 
 	return nil
+}
+
+// generateSettingsJSON returns the content of settings.json for the given stack/DB configuration.
+func generateSettingsJSON(stack, dbType string) ([]byte, error) {
+	settings := map[string]any{}
+
+	switch stack {
+	case "go-api":
+		db := map[string]any{}
+		switch dbType {
+		case "postgres":
+			db["type"] = "postgres"
+			db["dsn"] = "postgres://localhost:5432/myapp?sslmode=disable"
+		case "memory":
+			db["type"] = "memory"
+		default: // sqlite
+			db["type"] = "sqlite"
+			db["dsn"] = "./data.db"
+		}
+		settings["database"] = db
+		settings["server"] = map[string]any{
+			"bind": "localhost:8080",
+		}
+	case "goth":
+		settings["database"] = map[string]any{
+			"type": "sqlite",
+			"dsn":  "./data.db",
+		}
+		settings["server"] = map[string]any{
+			"bind": "localhost:3000",
+		}
+	}
+
+	return json.MarshalIndent(settings, "", "  ")
 }
 
 // cliName returns the platform-appropriate koor-cli binary name.
@@ -273,4 +329,22 @@ func CopyCLI(srcPath, destDir string) (string, error) {
 	}
 
 	return destPath, nil
+}
+
+// dbInstructions returns go-api stack instructions customized for the DB type.
+func dbInstructions(dbType string) []string {
+	base := []string{
+		"Build a REST API using Go stdlib net/http",
+		`Use Go 1.22+ routing patterns with wildcards: mux.HandleFunc("GET /api/resource/{id}", handler)`,
+		"Return JSON responses with proper Content-Type headers",
+		"Write table-driven tests using the testing package",
+	}
+	switch dbType {
+	case "postgres":
+		return append(base, "Use PostgreSQL for data persistence (database/sql + github.com/jackc/pgx)")
+	case "memory":
+		return append(base, "Use in-memory data structures (maps/slices) for data storage — no external database")
+	default: // "sqlite"
+		return append(base, "Use SQLite via modernc.org/sqlite for data persistence")
+	}
 }

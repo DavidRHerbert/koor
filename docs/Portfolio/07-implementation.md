@@ -80,7 +80,7 @@ Built:
 - ETag caching on state GET and specs GET (SHA-256 hash, `If-None-Match` support)
 - `X-Koor-Version` response header
 - Graceful shutdown on SIGINT/SIGTERM (5-second deadline)
-- Config file support (`koor.config.json`) with search path and explicit `--config` flag
+- Config file support (`settings.json`) with search path and explicit `--config` flag
 - Config priority: CLI flags > env vars > config file > defaults
 - Structured logging (slog with configurable level)
 - Server timeouts (read: 10s, write: 30s, idle: 60s)

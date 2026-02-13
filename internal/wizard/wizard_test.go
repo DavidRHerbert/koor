@@ -21,10 +21,16 @@ func TestRegistryHasAllStacks(t *testing.T) {
 		t.Errorf("StackIDs() = %d stacks, want %d", len(ids), len(expected))
 	}
 
-	// Verify sorted order.
-	for i := 1; i < len(ids); i++ {
+	// Verify pinned order: goth first, go-api second, rest sorted alphabetically.
+	if ids[0] != "goth" {
+		t.Errorf("StackIDs()[0] = %q, want %q", ids[0], "goth")
+	}
+	if ids[1] != "go-api" {
+		t.Errorf("StackIDs()[1] = %q, want %q", ids[1], "go-api")
+	}
+	for i := 3; i < len(ids); i++ {
 		if ids[i] < ids[i-1] {
-			t.Errorf("StackIDs() not sorted: %q before %q", ids[i-1], ids[i])
+			t.Errorf("StackIDs() not sorted after pinned: %q before %q", ids[i-1], ids[i])
 		}
 	}
 }
@@ -128,7 +134,8 @@ func TestMCPJSON(t *testing.T) {
 
 	var cfg struct {
 		MCPServers map[string]struct {
-			URL string `json:"url"`
+			Type string `json:"type"`
+			URL  string `json:"url"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -138,6 +145,9 @@ func TestMCPJSON(t *testing.T) {
 	koor, ok := cfg.MCPServers["koor"]
 	if !ok {
 		t.Fatal("mcp.json missing 'koor' server entry")
+	}
+	if koor.Type != "http" {
+		t.Errorf("mcp.json type = %q, want %q", koor.Type, "http")
 	}
 	if koor.URL != "http://localhost:9800/mcp" {
 		t.Errorf("mcp.json URL = %q, want %q", koor.URL, "http://localhost:9800/mcp")
@@ -238,6 +248,14 @@ func TestScaffoldProject(t *testing.T) {
 	if !strings.Contains(string(agentClaude), "NEVER read, write, or modify files outside this workspace directory") {
 		t.Error("agent CLAUDE.md missing sandbox rules")
 	}
+
+	// Verify settings.json created for Go app stacks (goth, go-api) but not others.
+	for _, name := range []string{"frontend", "backend"} {
+		settingsPath := filepath.Join(dir, "test-project-"+name, "settings.json")
+		if _, err := os.Stat(settingsPath); err != nil {
+			t.Errorf("missing settings.json in %s agent dir", name)
+		}
+	}
 }
 
 func TestScaffoldAgent(t *testing.T) {
@@ -308,6 +326,159 @@ func TestScaffoldAgentGenericFallback(t *testing.T) {
 	}
 	if !strings.Contains(string(claudeBytes), "Generic") {
 		t.Error("unknown stack should fall back to generic template")
+	}
+}
+
+func TestScaffoldAgentGoAPIPostgres(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "proj-backend")
+
+	cfg := AgentConfig{
+		ProjectName:  "Proj",
+		AgentName:    "backend",
+		Stack:        "go-api",
+		DBType:       "postgres",
+		ServerURL:    "http://localhost:9800",
+		WorkspaceDir: agentDir,
+	}
+
+	if err := ScaffoldAgent(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check CLAUDE.md has postgres instructions.
+	claudeBytes, _ := os.ReadFile(filepath.Join(agentDir, "CLAUDE.md"))
+	content := string(claudeBytes)
+	if !strings.Contains(content, "PostgreSQL") {
+		t.Error("go-api agent with postgres DBType should mention PostgreSQL in instructions")
+	}
+	if strings.Contains(content, "modernc.org/sqlite") {
+		t.Error("go-api agent with postgres DBType should not mention SQLite")
+	}
+
+	// Check settings.json exists and has postgres config.
+	settingsBytes, err := os.ReadFile(filepath.Join(agentDir, "settings.json"))
+	if err != nil {
+		t.Fatal("missing settings.json")
+	}
+	if !strings.Contains(string(settingsBytes), `"postgres"`) {
+		t.Error("settings.json should contain postgres type")
+	}
+}
+
+func TestScaffoldAgentGoAPISQLite(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "proj-api")
+
+	cfg := AgentConfig{
+		ProjectName:  "Proj",
+		AgentName:    "api",
+		Stack:        "go-api",
+		DBType:       "sqlite",
+		ServerURL:    "http://localhost:9800",
+		WorkspaceDir: agentDir,
+	}
+
+	if err := ScaffoldAgent(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	claudeBytes, _ := os.ReadFile(filepath.Join(agentDir, "CLAUDE.md"))
+	if !strings.Contains(string(claudeBytes), "modernc.org/sqlite") {
+		t.Error("go-api agent with sqlite DBType should mention modernc.org/sqlite")
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(agentDir, "settings.json"))
+	if err != nil {
+		t.Fatal("missing settings.json")
+	}
+	if !strings.Contains(string(settingsBytes), `"sqlite"`) {
+		t.Error("settings.json should contain sqlite type")
+	}
+}
+
+func TestScaffoldAgentGoAPIMemory(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "proj-api")
+
+	cfg := AgentConfig{
+		ProjectName:  "Proj",
+		AgentName:    "api",
+		Stack:        "go-api",
+		DBType:       "memory",
+		ServerURL:    "http://localhost:9800",
+		WorkspaceDir: agentDir,
+	}
+
+	if err := ScaffoldAgent(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	claudeBytes, _ := os.ReadFile(filepath.Join(agentDir, "CLAUDE.md"))
+	content := string(claudeBytes)
+	if !strings.Contains(content, "in-memory") {
+		t.Error("go-api agent with memory DBType should mention in-memory")
+	}
+	if strings.Contains(content, "modernc.org/sqlite") {
+		t.Error("go-api agent with memory DBType should not mention SQLite")
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(agentDir, "settings.json"))
+	if err != nil {
+		t.Fatal("missing settings.json")
+	}
+	if !strings.Contains(string(settingsBytes), `"memory"`) {
+		t.Error("settings.json should contain memory type")
+	}
+}
+
+func TestGothAgentGetsSettingsJSON(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "proj-frontend")
+
+	cfg := AgentConfig{
+		ProjectName:  "Proj",
+		AgentName:    "frontend",
+		Stack:        "goth",
+		ServerURL:    "http://localhost:9800",
+		WorkspaceDir: agentDir,
+	}
+
+	if err := ScaffoldAgent(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(agentDir, "settings.json"))
+	if err != nil {
+		t.Fatal("missing settings.json for goth agent")
+	}
+	if !strings.Contains(string(settingsBytes), `"sqlite"`) {
+		t.Error("goth settings.json should default to sqlite")
+	}
+	if !strings.Contains(string(settingsBytes), `"localhost:3000"`) {
+		t.Error("goth settings.json should bind to localhost:3000")
+	}
+}
+
+func TestFlutterAgentNoSettingsJSON(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "proj-mobile")
+
+	cfg := AgentConfig{
+		ProjectName:  "Proj",
+		AgentName:    "mobile",
+		Stack:        "flutter",
+		ServerURL:    "http://localhost:9800",
+		WorkspaceDir: agentDir,
+	}
+
+	if err := ScaffoldAgent(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	if _, err := os.Stat(settingsPath); err == nil {
+		t.Error("flutter agent should NOT have settings.json")
 	}
 }
 

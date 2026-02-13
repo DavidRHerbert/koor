@@ -13,7 +13,7 @@ Configuration is resolved highest-wins:
 3. **Config file**
 4. **Defaults** (lowest)
 
-If `--config` is provided, the config file is loaded from that path. Otherwise, the server looks for `koor.config.json` in the current directory, then in `~/.koor/koor.config.json`.
+If `--config` is provided, the config file is loaded from that path. Otherwise, the server looks for `settings.json` in the current directory.
 
 ### Flags
 
@@ -21,10 +21,10 @@ If `--config` is provided, the config file is loaded from that path. Otherwise, 
 |------|---------|-------------|
 | `--bind` | `localhost:9800` | API listen address (host:port) |
 | `--dashboard-bind` | `localhost:9847` | Dashboard listen address (empty string disables dashboard) |
-| `--data-dir` | `~/.koor` | Directory for SQLite database and config files |
+| `--data-dir` | `.` | Directory for SQLite database and config files |
 | `--auth-token` | *(empty)* | Bearer token for API authentication. Empty = no auth (local mode) |
 | `--log-level` | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `--config` | *(auto-detected)* | Path to config file. Default: `./koor.config.json` then `~/.koor/koor.config.json` |
+| `--config` | *(auto-detected)* | Path to config file. Default: `./settings.json` |
 
 ### Environment Variables
 
@@ -40,7 +40,7 @@ If `--config` is provided, the config file is loaded from that path. Otherwise, 
 
 JSON format. All fields are optional — unset fields use their defaults.
 
-**File:** `koor.config.json`
+**File:** `settings.json`
 
 ```json
 {
@@ -52,10 +52,9 @@ JSON format. All fields are optional — unset fields use their defaults.
 }
 ```
 
-**File locations searched (in order):**
+**File locations searched:**
 
-1. `./koor.config.json` (current working directory)
-2. `~/.koor/koor.config.json` (data directory)
+1. `./settings.json` (current working directory)
 
 If `--config path/to/file.json` is provided, that path is used instead.
 
@@ -65,7 +64,7 @@ If `--config path/to/file.json` is provided, that path is used instead.
 
 ```bash
 ./koor-server
-# API: localhost:9800, Dashboard: localhost:9847, No auth, ~/.koor/data.db
+# API: localhost:9800, Dashboard: localhost:9847, No auth, ./data.db
 ```
 
 **LAN access with auth:**
@@ -105,13 +104,15 @@ export KOOR_LOG_LEVEL=debug
 
 ## CLI Configuration
 
-The CLI stores its config in `~/.koor/config.toml`.
+The CLI stores its config in `./settings.json`.
 
 ### Config File
 
-```toml
-server = "http://localhost:9800"
-token = "my-secret-token"
+```json
+{
+  "server": "http://localhost:9800",
+  "token": "my-secret-token"
+}
 ```
 
 ### Setting Values
@@ -133,7 +134,7 @@ Environment variables take priority over the config file.
 ### Priority Order
 
 1. **Environment variables** (highest)
-2. **Config file** (`~/.koor/config.toml`)
+2. **Config file** (`./settings.json`)
 3. **Defaults** (lowest)
 
 ---

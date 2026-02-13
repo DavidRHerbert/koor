@@ -105,7 +105,7 @@ Each exclusion was a system I considered building and decided against. The resul
 
 Same binary, different flags:
 
-**Tier 1 — Local:** `./koor-server` (localhost:9800, no auth, ~/.koor/data.db). The default for solo development. Zero configuration.
+**Tier 1 — Local:** `./koor-server` (localhost:9800, no auth, ./data.db). The default for solo development. Zero configuration.
 
 **Tier 2 — LAN:** `./koor-server --bind 0.0.0.0:9800 --auth-token secret123`. For team setups where agents run on different machines on the same network.
 
