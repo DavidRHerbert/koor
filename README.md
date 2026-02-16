@@ -208,6 +208,7 @@ go build ./...               # Build all
 
 ## Community
 
+- **Demo video:** [Why I Built Koor](https://www.youtube.com/watch?v=HhfQ-0gJugA)
 - **YouTube:** [@Monkey-See-AI-Do](https://youtube.com/@Monkey-See-AI-Do)
 - **X (Twitter):** [@DHerbertW2C](https://x.com/DHerbertW2C)
 
