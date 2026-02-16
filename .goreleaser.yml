@@ -1,5 +1,10 @@
 version: 2
 
+before:
+  hooks:
+    - go mod tidy
+    - go test ./... -count=1
+
 builds:
   - id: koor-server
     main: ./cmd/koor-server
@@ -77,3 +82,21 @@ changelog:
     exclude:
       - "^docs:"
       - "^test:"
+      - "^ci:"
+
+release:
+  prerelease: auto
+  header: |
+    ## Koor {{ .Version }}
+
+    Coordination server for AI coding agents.
+
+    ### Installation
+
+    Download the archive for your platform, extract, and place the binaries on your PATH.
+
+    ```bash
+    ./koor-wizard    # Scaffold a project
+    ./koor-server    # Start the server
+    ./koor-cli status
+    ```
