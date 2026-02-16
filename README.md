@@ -1,5 +1,10 @@
 # Koor
 
+[![CI](https://github.com/DavidRHerbert/koor/actions/workflows/ci.yml/badge.svg)](https://github.com/DavidRHerbert/koor/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/DavidRHerbert/koor)](https://goreportcard.com/report/github.com/DavidRHerbert/koor)
+[![Release](https://img.shields.io/github/v/release/DavidRHerbert/koor?include_prereleases)](https://github.com/DavidRHerbert/koor/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 > **Beta** — Koor is under active development. APIs may change between releases.
 
 Koor is a **coordination server** for AI coding agents — infrastructure, not a framework. Like Redis for caching, Koor provides shared state, specs, and events for any LLM agent that can speak REST or MCP. It's agnostic to IDE, LLM provider, and language.
