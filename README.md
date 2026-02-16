@@ -1,5 +1,7 @@
 # Koor
 
+> **Beta** — Koor is under active development. APIs may change between releases.
+
 Koor is a **coordination server** for AI coding agents — infrastructure, not a framework. Like Redis for caching, Koor provides shared state, specs, and events for any LLM agent that can speak REST or MCP. It's agnostic to IDE, LLM provider, and language.
 
 Koor splits **control** (MCP, thin discovery layer) from **data** (REST + CLI, direct access), solving the MCP Token Tax Problem — where all coordination data gets routed through the LLM context window, burning tokens on data the LLM doesn't need to reason about.
@@ -33,18 +35,18 @@ Furthermore, the developer is free to become an AI slop generator! Conducting co
 
 ## What's Genuinely New
 
-Koor combines coordination + shared specifications + contract validation + cross-LLM + project scaffolding + standalone binary. As of February 2026, no single system covers all seven:
+Koor combines coordination + shared specifications + contract validation + cross-LLM + project scaffolding + audit trail + standalone binary. As of February 2026, no single system covers all of these:
 
-| System | Coordination | Shared State | Shared Specs | Contracts | Cross-LLM | Scaffolding | Standalone |
-|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Claude Agent Teams | Yes | No | No | No | No | No | No |
-| Claude-Flow | Yes | Yes | No | No | No | No | No |
-| LangGraph | Yes | Yes | No | No | No | No | No |
-| AutoGen | Yes | Yes | No | No | No | No | No |
-| A2A Protocol | Yes | No | No | No | Yes | No | No |
-| MCP Gateways | No | No | No | No | Yes | No | Yes |
-| W2C AI MCP | No | No | Yes | No | Yes* | No | Yes |
-| **Koor** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
+| System | Coordination | Shared State | Shared Specs | Contracts | Cross-LLM | Liveness | Webhooks | Audit | Standalone |
+|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Claude Agent Teams | Yes | No | No | No | No | No | No | No | No |
+| Claude-Flow | Yes | Yes | No | No | No | No | No | No | No |
+| LangGraph | Yes | Yes | No | No | No | No | No | No | No |
+| AutoGen | Yes | Yes | No | No | No | No | No | Yes | No |
+| A2A Protocol | Yes | No | No | No | Yes | No | No | No | No |
+| MCP Gateways | No | No | No | No | Yes | No | No | No | Yes |
+| W2C AI MCP | No | No | Yes | No | Yes* | No | No | No | Yes |
+| **Koor** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
 
 
 
@@ -101,14 +103,20 @@ Six words to set up and run a multi-agent project.
 | Primitive | Role |
 |-----------|------|
 | **MCP** | Agents register and discover each other on startup |
-| **State** | Task assignments (agents read when user says "next") |
-| **Events** | Done/request/approval notifications (agents check via CLI) |
+| **State** | Task assignments (agents read when user says "next"), versioned with history and rollback |
+| **Events** | Done/request/approval notifications with time-range queries |
 | **Contracts** | Shared API contracts with schema validation |
 | **Validation** | Automated code quality per stack |
+| **Liveness** | Background monitor detects stale agents, auto-marks them, emits events |
+| **Webhooks** | Register URLs to receive events via HTTP POST with HMAC signatures |
+| **Compliance** | Scheduled contract validation — catches drift before it causes bugs |
+| **Capabilities** | Agents declare what they can do; others discover by capability |
+| **Templates** | Shareable rule/contract bundles — export from one project, apply to another |
+| **Audit** | Immutable log of every configuration change (who, what, when, outcome) |
+| **Agent Metrics** | Per-agent call counts and violation rates in hourly buckets |
 | **Token Tax** | Dashboard tracks MCP vs REST calls and token savings |
 | **Dashboard** | Visual overview at :9847 |
 | **Wizard** | `koor-wizard` scaffolds entire projects interactively |
-| **Event history** | Survives context resets — agent can re-read what happened |
 
 ### What the Controller's Files Provide
 
@@ -183,14 +191,20 @@ CLI ───REST───/
 
 - **4 dependencies:** modernc.org/sqlite, nhooyr.io/websocket, mark3labs/mcp-go, charmbracelet/huh
 - **Pure Go:** CGO_ENABLED=0, cross-compiles to all platforms
-- **3 binaries:** koor-server (embed dashboard via go:embed), koor-cli, koor-wizard
+- **3 binaries:** koor-server (embedded dashboard via go:embed), koor-cli, koor-wizard
+- **15 packages:** state, specs, events, instances, liveness, webhooks, compliance, templates, audit, observability, contracts, mcp, wizard, server, db
 
 ## Development
 
 ```bash
-go test ./... -v -count=1    # 120 tests
+go test ./... -v -count=1    # 201 tests
 go build ./...               # Build all
 ```
+
+## Community
+
+- **YouTube:** [@Monkey-See-AI-Do](https://youtube.com/@Monkey-See-AI-Do)
+- **X (Twitter):** [@DHerbertW2C](https://x.com/DHerbertW2C)
 
 ## Sponsorship
 

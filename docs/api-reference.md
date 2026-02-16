@@ -83,7 +83,18 @@ Returns an empty array `[]` when no keys exist.
 
 Get the value for a key. Keys can contain slashes for project scoping (e.g. `Truck-Wash/backend-task`). Returns the raw stored value with its original content type.
 
-**Response Headers**
+Also supports version history, specific version retrieval, and version diffing via query parameters.
+
+**Query Parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `history=1` | List version history instead of returning the current value |
+| `limit=N` | Limit history results (default 50, only with `history=1`) |
+| `version=N` | Get a specific historical version |
+| `diff=v1,v2` | JSON diff between two versions |
+
+**Response Headers** (default mode)
 
 | Header | Description |
 |--------|-------------|
@@ -91,7 +102,7 @@ Get the value for a key. Keys can contain slashes for project scoping (e.g. `Tru
 | `ETag` | SHA-256 hash of the value, quoted (`"abc123..."`) |
 | `X-Koor-Version` | Integer version number |
 
-**Response** `200` — Raw value body
+**Response** `200` — Raw value body (default mode)
 
 **ETag Caching** — Send `If-None-Match` with the ETag value to get a `304 Not Modified` if the value hasn't changed:
 
@@ -101,6 +112,36 @@ If-None-Match: "e3b0c44298fc1c149afb..."
 ```
 
 Response `304` with empty body if unchanged.
+
+**History Mode** — `GET /api/state/api-contract?history=1&limit=10`
+
+```json
+{
+  "key": "api-contract",
+  "versions": [
+    {"version": 3, "hash": "abc...", "updated_at": "2026-02-16T14:30:00Z"},
+    {"version": 2, "hash": "def...", "updated_at": "2026-02-16T13:00:00Z"},
+    {"version": 1, "hash": "ghi...", "updated_at": "2026-02-16T12:00:00Z"}
+  ]
+}
+```
+
+**Version Mode** — `GET /api/state/api-contract?version=2`
+
+Returns the raw value body of version 2 with `Content-Type` and `X-Koor-Version` headers.
+
+**Diff Mode** — `GET /api/state/api-contract?diff=1,3`
+
+```json
+{
+  "key": "api-contract",
+  "v1": 1,
+  "v2": 3,
+  "diffs": [
+    {"operation": "replace", "path": "/version", "old_value": "1.0", "new_value": "3.0"}
+  ]
+}
+```
 
 **Error** `404`
 
@@ -139,6 +180,39 @@ Version starts at 1 for new keys and increments by 1 on each update.
 ```json
 {"error": "empty body", "code": 400}
 ```
+
+### POST /api/state/{key...}?rollback=N
+
+Rollback a state key to a previous version. The historical value is restored as a new version.
+
+**Query Parameters**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `rollback` | Yes | Version number to rollback to |
+
+**Example**
+
+```
+POST /api/state/api-contract?rollback=2
+```
+
+**Response** `200`
+
+```json
+{
+  "key": "api-contract",
+  "version": 4,
+  "hash": "e3b0c44298fc1c14...",
+  "rolled_back": 2,
+  "updated_at": "2026-02-16T15:00:00Z"
+}
+```
+
+**Error** `400` — Missing or invalid rollback version.
+**Error** `404` — Key or version not found.
+
+---
 
 ### DELETE /api/state/{key...}
 
@@ -292,7 +366,7 @@ Publish an event to a topic. The event is persisted to history and fanned out to
 
 ### GET /api/events/history
 
-Retrieve recent events from history.
+Retrieve recent events from history. Supports time-range and source filtering.
 
 **Query Parameters**
 
@@ -300,6 +374,9 @@ Retrieve recent events from history.
 |-----------|---------|-------------|
 | `last` | `50` | Number of events to return (most recent first) |
 | `topic` | `*` (all) | Glob pattern to filter by topic |
+| `from` | *(none)* | Start time (RFC 3339, e.g. `2026-02-16T14:00:00Z`) |
+| `to` | *(none)* | End time (RFC 3339) |
+| `source` | *(none)* | Filter by event source |
 
 **Examples**
 
@@ -307,6 +384,8 @@ Retrieve recent events from history.
 GET /api/events/history
 GET /api/events/history?last=10
 GET /api/events/history?last=100&topic=api.*
+GET /api/events/history?from=2026-02-16T14:00:00Z&to=2026-02-16T15:00:00Z
+GET /api/events/history?source=agent-1&topic=api.*
 ```
 
 **Response** `200`
@@ -382,6 +461,7 @@ List all registered instances. Supports optional query parameter filters.
 | `name` | No | Filter by agent name |
 | `workspace` | No | Filter by workspace |
 | `stack` | No | Filter by technology stack (e.g. `goth`, `react`) |
+| `capability` | No | Filter by declared capability |
 
 **Examples**
 
@@ -401,6 +481,8 @@ GET /api/instances?name=claude&workspace=/projects/frontend
     "workspace": "/projects/frontend",
     "intent": "implementing dark mode",
     "stack": "goth",
+    "capabilities": ["code-review", "testing"],
+    "status": "active",
     "registered_at": "2026-02-09T12:00:00Z",
     "last_seen": "2026-02-09T14:30:00Z"
   }
@@ -494,6 +576,68 @@ Update the `last_seen` timestamp for an instance. Call periodically to indicate 
 {"error": "instance not found: 550e8400-...", "code": 404}
 ```
 
+### POST /api/instances/{id}/activate
+
+Activate an agent instance (confirms CLI connectivity after registration).
+
+**Request Body** — None required.
+
+**Response** `200`
+
+```json
+{"id": "550e8400-...", "status": "active"}
+```
+
+**Error** `404`
+
+```json
+{"error": "instance not found: 550e8400-...", "code": 404}
+```
+
+### POST /api/instances/{id}/capabilities
+
+Set the capabilities for an agent instance. Capabilities are strings describing what the agent can do (e.g. `code-review`, `testing`, `deployment`).
+
+**Request Body**
+
+```json
+{
+  "capabilities": ["code-review", "testing", "deployment"]
+}
+```
+
+**Response** `200`
+
+```json
+{"id": "550e8400-...", "capabilities": ["code-review", "testing", "deployment"]}
+```
+
+**Error** `404`
+
+```json
+{"error": "instance not found: 550e8400-...", "code": 404}
+```
+
+### GET /api/instances/stale
+
+List instances that have been marked stale (no heartbeat within the configured timeout, default 5 minutes).
+
+**Response** `200`
+
+```json
+[
+  {
+    "id": "550e8400-...",
+    "name": "claude-frontend",
+    "workspace": "/projects/frontend",
+    "status": "stale",
+    "last_seen": "2026-02-09T14:00:00Z"
+  }
+]
+```
+
+Returns an empty array `[]` when no instances are stale.
+
 ### DELETE /api/instances/{id}
 
 Deregister an instance.
@@ -508,6 +652,28 @@ Deregister an instance.
 
 ```json
 {"error": "instance not found: 550e8400-...", "code": 404}
+```
+
+---
+
+## Liveness
+
+Background liveness monitoring detects agents that have stopped sending heartbeats.
+
+### POST /api/liveness/check
+
+Force an immediate liveness check. Returns any instances that were newly marked as stale.
+
+**Response** `200`
+
+```json
+{
+  "checked": true,
+  "newly_stale": [
+    {"id": "550e8400-...", "name": "claude-frontend", "status": "stale"}
+  ],
+  "count": 1
+}
 ```
 
 ---
@@ -789,7 +955,7 @@ Bulk import rules. Uses UPSERT — existing rules with the same `project`/`rule_
 
 ### GET /api/metrics
 
-Server metrics summary.
+Server metrics summary (token tax tracking).
 
 **Response** `200`
 
@@ -806,6 +972,411 @@ Server metrics summary.
 
 ---
 
+## Webhooks
+
+Register URLs to receive HTTP POST notifications when events match specified patterns. Webhooks include HMAC signatures when a secret is configured, and auto-disable after 10 consecutive failures.
+
+### POST /api/webhooks
+
+Register a new webhook.
+
+**Request Body**
+
+```json
+{
+  "id": "slack-notify",
+  "url": "https://hooks.example.com/koor",
+  "patterns": ["agent.*", "compliance.*"],
+  "secret": "my-hmac-secret"
+}
+```
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `id` | Yes | — | Unique webhook identifier |
+| `url` | Yes | — | URL to POST events to |
+| `patterns` | No | `["*"]` | Event topic patterns to match |
+| `secret` | No | `""` | HMAC-SHA256 secret for signing payloads |
+
+**Response** `200`
+
+```json
+{
+  "id": "slack-notify",
+  "url": "https://hooks.example.com/koor",
+  "patterns": ["agent.*", "compliance.*"],
+  "active": true,
+  "created_at": "2026-02-16T14:30:00Z",
+  "fail_count": 0
+}
+```
+
+### GET /api/webhooks
+
+List all registered webhooks.
+
+**Response** `200`
+
+```json
+[
+  {
+    "id": "slack-notify",
+    "url": "https://hooks.example.com/koor",
+    "patterns": ["agent.*"],
+    "active": true,
+    "created_at": "2026-02-16T14:30:00Z",
+    "last_fired": "2026-02-16T15:00:00Z",
+    "fail_count": 0
+  }
+]
+```
+
+### DELETE /api/webhooks/{id}
+
+Delete a webhook.
+
+**Response** `200`
+
+```json
+{"deleted": "slack-notify"}
+```
+
+**Error** `404`
+
+```json
+{"error": "webhook not found: slack-notify", "code": 404}
+```
+
+### POST /api/webhooks/{id}/test
+
+Fire a test event to the webhook to verify connectivity.
+
+**Response** `200`
+
+```json
+{"tested": "slack-notify", "status": "ok"}
+```
+
+**Error** `404` — Webhook not found.
+**Error** `400` — Test delivery failed.
+
+---
+
+## Compliance
+
+Scheduled contract validation that checks active agents against their project contracts. Runs automatically every 5 minutes and emits `compliance.violation` events on failures.
+
+### GET /api/compliance/history
+
+Query recent compliance check results.
+
+**Query Parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `instance_id` | *(all)* | Filter by specific agent instance |
+| `limit` | `50` | Maximum results to return |
+
+**Response** `200`
+
+```json
+[
+  {
+    "id": 1,
+    "instance_id": "550e8400-...",
+    "project": "Truck-Wash",
+    "contract": "api-contract",
+    "pass": true,
+    "violations": [],
+    "run_at": "2026-02-16T14:30:00Z"
+  }
+]
+```
+
+### POST /api/compliance/run
+
+Force an immediate compliance check across all active agents.
+
+**Response** `200`
+
+```json
+{
+  "checked": true,
+  "runs": [
+    {
+      "id": 5,
+      "instance_id": "550e8400-...",
+      "project": "Truck-Wash",
+      "contract": "api-contract",
+      "pass": false,
+      "violations": [{"field": "color", "message": "missing required field"}],
+      "run_at": "2026-02-16T15:00:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+---
+
+## Templates
+
+Shareable template bundles for packaging and distributing rule sets, contracts, or mixed bundles across projects.
+
+### POST /api/templates
+
+Create a new template.
+
+**Request Body**
+
+```json
+{
+  "id": "strict-api-rules",
+  "name": "Strict API Rules",
+  "description": "Standard API validation rules for all projects",
+  "kind": "rules",
+  "data": [{"rule_id": "no-console-log", "pattern": "console\\.log"}],
+  "tags": ["api", "strict"]
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | Yes | Unique template identifier |
+| `name` | Yes | Human-readable name |
+| `description` | No | Description |
+| `kind` | No | `rules`, `contracts`, or `bundle` |
+| `data` | No | Template payload (JSON) |
+| `tags` | No | Metadata tags for filtering |
+
+**Response** `200` — The created template object.
+
+### GET /api/templates
+
+List all templates.
+
+**Query Parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `kind` | Filter by kind (`rules`, `contracts`, `bundle`) |
+| `tag` | Filter by tag |
+
+**Response** `200`
+
+```json
+[
+  {
+    "id": "strict-api-rules",
+    "name": "Strict API Rules",
+    "description": "Standard API validation rules",
+    "kind": "rules",
+    "tags": ["api", "strict"],
+    "version": 1,
+    "created_at": "2026-02-16T14:30:00Z",
+    "updated_at": "2026-02-16T14:30:00Z"
+  }
+]
+```
+
+### GET /api/templates/{id}
+
+Get a template with its full data payload.
+
+**Response** `200` — Full template object including `data`.
+
+**Error** `404`
+
+```json
+{"error": "template not found: strict-api-rules", "code": 404}
+```
+
+### DELETE /api/templates/{id}
+
+Delete a template.
+
+**Response** `200`
+
+```json
+{"deleted": "strict-api-rules"}
+```
+
+### POST /api/templates/{id}/apply
+
+Apply a template to a project. For `rules` templates, rules are imported. For `contracts` templates, data is stored as a spec.
+
+**Request Body**
+
+```json
+{
+  "project": "Truck-Wash"
+}
+```
+
+**Response** `200`
+
+```json
+{"applied": "strict-api-rules", "project": "Truck-Wash", "kind": "rules"}
+```
+
+---
+
+## Audit
+
+Immutable, append-only log of all configuration changes. Records who changed what, when, and the outcome. Every mutating API call is logged automatically.
+
+### GET /api/audit
+
+Query the audit log.
+
+**Query Parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `actor` | *(all)* | Filter by actor (agent or user) |
+| `action` | *(all)* | Filter by action type (e.g. `state.put`, `webhook.create`) |
+| `from` | *(none)* | Start time (ISO 8601) |
+| `to` | *(none)* | End time (ISO 8601) |
+| `limit` | `50` | Maximum entries to return |
+
+**Examples**
+
+```
+GET /api/audit
+GET /api/audit?action=state.put&limit=10
+GET /api/audit?actor=agent-1&from=2026-02-16T00:00:00Z
+```
+
+**Response** `200`
+
+```json
+[
+  {
+    "id": 42,
+    "timestamp": "2026-02-16T14:30:00Z",
+    "actor": "agent-1",
+    "action": "state.put",
+    "resource": "Truck-Wash/status",
+    "detail": "{\"version\":1}",
+    "outcome": "success"
+  }
+]
+```
+
+**Tracked Actions**
+
+| Action | Description |
+|--------|-------------|
+| `state.put` | State key created or updated |
+| `state.rollback` | State key rolled back to previous version |
+| `state.delete` | State key deleted |
+| `spec.put` | Spec created or updated |
+| `spec.delete` | Spec deleted |
+| `instance.register` | Agent registered |
+| `instance.activate` | Agent activated |
+| `instance.deregister` | Agent deregistered |
+| `instance.capabilities` | Agent capabilities updated |
+| `rule.propose` | Validation rule proposed |
+| `rule.accept` | Proposed rule accepted |
+| `rule.reject` | Proposed rule rejected |
+| `rules.import` | Rules imported in bulk |
+| `webhook.create` | Webhook registered |
+| `webhook.delete` | Webhook deleted |
+| `template.create` | Template created |
+| `template.delete` | Template deleted |
+| `template.apply` | Template applied to project |
+
+### GET /api/audit/summary
+
+Aggregated summary of audit activity.
+
+**Query Parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `from` | Start time (ISO 8601) |
+| `to` | End time (ISO 8601) |
+
+**Response** `200`
+
+```json
+{
+  "total_entries": 42,
+  "action_counts": {"state.put": 20, "spec.put": 10, "instance.register": 5},
+  "outcome_counts": {"success": 40, "error": 2},
+  "unique_actors": 3,
+  "unique_resources": 15
+}
+```
+
+---
+
+## Agent Metrics
+
+Per-agent operational metrics aggregated in hourly buckets. Tracks call counts, violations, rollbacks, and other counters per agent.
+
+### GET /api/metrics/agents
+
+Query agent metrics. Without `instance_id`, returns aggregated summaries for all agents. With `instance_id`, returns detailed per-period metrics.
+
+**Query Parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `instance_id` | *(all)* | Filter by specific agent instance |
+| `period` | *(all)* | Filter by time period prefix (e.g. `2026-02-16` for a day, `2026-02-16T14` for an hour) |
+
+**Response** `200` (summary mode, no instance_id)
+
+```json
+[
+  {
+    "instance_id": "550e8400-...",
+    "metrics": {"rest_calls": 150, "mcp_calls": 5, "violations": 2}
+  }
+]
+```
+
+**Response** `200` (detail mode, with instance_id)
+
+```json
+[
+  {
+    "instance_id": "550e8400-...",
+    "metric_name": "rest_calls",
+    "metric_value": 42,
+    "period": "2026-02-16T14"
+  }
+]
+```
+
+### GET /api/metrics/agents/{id}
+
+Get metrics for a specific agent.
+
+**Query Parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `period` | *(all)* | Filter by time period prefix |
+
+**Response** `200`
+
+```json
+[
+  {
+    "instance_id": "550e8400-...",
+    "metric_name": "rest_calls",
+    "metric_value": 42,
+    "period": "2026-02-16T14"
+  }
+]
+```
+
+Returns an empty array `[]` when no metrics exist.
+
+---
+
 ## MCP
 
 Model Context Protocol endpoint using StreamableHTTP transport. This is the discovery-only interface for LLM agents. For data operations, use the REST API or CLI.
@@ -818,8 +1389,8 @@ StreamableHTTP MCP transport. Connect via MCP client libraries (e.g. `mark3labs/
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
-| `register_instance` | `name` (required), `workspace`, `intent`, `stack` | Register this agent instance. Returns instance ID, token, and REST endpoints. |
-| `discover_instances` | `name`, `workspace`, `stack` | Discover other registered agent instances. Filters are optional. |
+| `register_instance` | `name` (required), `workspace`, `intent`, `stack`, `capabilities` | Register this agent instance. Returns instance ID, token, and REST endpoints. |
+| `discover_instances` | `name`, `workspace`, `stack`, `capability` | Discover other registered agent instances. Filters are optional. |
 | `set_intent` | `instance_id` (required), `intent` (required) | Update intent and refresh last_seen timestamp. |
 | `get_endpoints` | *(none)* | Get all REST API and CLI endpoints for direct data access. |
 | `propose_rule` | `project` (required), `rule_id` (required), `pattern` (required), `message` (required), `severity`, `match_type`, `stack`, `proposed_by`, `context` | Propose a validation rule for user review. |

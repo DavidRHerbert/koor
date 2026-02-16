@@ -67,6 +67,17 @@ func migrate(db *sql.DB) error {
 			updated_by   TEXT NOT NULL DEFAULT ''
 		)`,
 
+		`CREATE TABLE IF NOT EXISTS state_history (
+			key          TEXT NOT NULL,
+			version      INTEGER NOT NULL,
+			value        BLOB,
+			hash         TEXT NOT NULL,
+			content_type TEXT NOT NULL DEFAULT 'application/json',
+			updated_at   DATETIME NOT NULL DEFAULT (datetime('now')),
+			updated_by   TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (key, version)
+		)`,
+
 		`CREATE TABLE IF NOT EXISTS specs (
 			project    TEXT NOT NULL,
 			name       TEXT NOT NULL,
@@ -91,10 +102,62 @@ func migrate(db *sql.DB) error {
 			workspace     TEXT NOT NULL DEFAULT '',
 			intent        TEXT NOT NULL DEFAULT '',
 			stack         TEXT NOT NULL DEFAULT '',
+			capabilities  TEXT NOT NULL DEFAULT '[]',
 			status        TEXT NOT NULL DEFAULT 'pending',
 			token         TEXT NOT NULL DEFAULT '',
 			registered_at DATETIME NOT NULL DEFAULT (datetime('now')),
 			last_seen     DATETIME NOT NULL DEFAULT (datetime('now'))
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS webhooks (
+			id         TEXT PRIMARY KEY,
+			url        TEXT NOT NULL,
+			patterns   TEXT NOT NULL DEFAULT '["*"]',
+			secret     TEXT NOT NULL DEFAULT '',
+			active     INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			last_fired DATETIME,
+			fail_count INTEGER NOT NULL DEFAULT 0
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS compliance_runs (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			instance_id TEXT NOT NULL,
+			project     TEXT NOT NULL,
+			contract    TEXT NOT NULL,
+			pass        INTEGER NOT NULL DEFAULT 0,
+			violations  TEXT NOT NULL DEFAULT '[]',
+			run_at      DATETIME NOT NULL DEFAULT (datetime('now'))
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS templates (
+			id          TEXT PRIMARY KEY,
+			name        TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			kind        TEXT NOT NULL DEFAULT 'rules',
+			data        BLOB NOT NULL,
+			tags        TEXT NOT NULL DEFAULT '[]',
+			version     INTEGER NOT NULL DEFAULT 1,
+			created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
+			updated_at  DATETIME NOT NULL DEFAULT (datetime('now'))
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS audit_log (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME NOT NULL DEFAULT (datetime('now')),
+			actor     TEXT NOT NULL DEFAULT '',
+			action    TEXT NOT NULL,
+			resource  TEXT NOT NULL,
+			detail    TEXT NOT NULL DEFAULT '{}',
+			outcome   TEXT NOT NULL DEFAULT 'success'
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS agent_metrics (
+			instance_id  TEXT NOT NULL,
+			metric_name  TEXT NOT NULL,
+			metric_value INTEGER NOT NULL DEFAULT 0,
+			period       TEXT NOT NULL,
+			PRIMARY KEY (instance_id, metric_name, period)
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS validation_rules (
@@ -126,6 +189,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE validation_rules ADD COLUMN context TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE validation_rules ADD COLUMN created_at DATETIME NOT NULL DEFAULT (datetime('now'))`,
 		`ALTER TABLE instances ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`,
+		`ALTER TABLE instances ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'`,
 	}
 	for _, ddl := range alterMigrations {
 		db.Exec(ddl) // ignore error — column may already exist
@@ -138,6 +202,9 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_instances_last_seen ON instances(last_seen)`,
 		`CREATE INDEX IF NOT EXISTS idx_instances_stack ON instances(stack)`,
 		`CREATE INDEX IF NOT EXISTS idx_instances_status ON instances(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_metrics_instance ON agent_metrics(instance_id)`,
 	}
 
 	for _, ddl := range tables {

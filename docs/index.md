@@ -21,15 +21,24 @@ Koor splits **control** (MCP, thin discovery layer) from **data** (REST + CLI, d
 
 ## Core Concepts
 
-**Three shared layers:**
+**Shared layers:**
 
-1. **State Store** — Key/value store for shared data (API contracts, config, build artifacts)
-2. **Spec Registry** — Per-project specifications with validation rules
-3. **Event Bus** — Pub/sub with SQLite-backed history and WebSocket streaming
+1. **State Store** — Key/value store with versioned history, rollback, and JSON diff
+2. **Spec Registry** — Per-project specifications with validation rules and compliance checking
+3. **Event Bus** — Pub/sub with SQLite history, WebSocket streaming, time-range queries, and webhook notifications
+4. **Instance Registry** — Agent registration, capabilities, liveness monitoring, and stale detection
+5. **Audit & Observability** — Immutable change log and per-agent metrics in hourly buckets
+
+**Additional features:**
+
+- **Webhooks** — HTTP POST notifications for matching events with HMAC signatures
+- **Compliance** — Scheduled contract validation across active agents
+- **Templates** — Shareable rule/contract bundles for cross-project reuse
+- **Contracts** — API contract storage with JSON Schema validation
 
 **Two access methods:**
 
-- **MCP** (4 discovery tools, ~750 tokens) — Registration, discovery, intent updates
+- **MCP** (5 discovery/proposal tools, ~750 tokens) — Registration, discovery, intent updates, rule proposals
 - **REST + CLI** (0 tokens) — All data reads, writes, subscriptions
 
 **Any LLM, any IDE:**

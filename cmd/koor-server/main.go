@@ -10,14 +10,20 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DavidRHerbert/koor/internal/audit"
+	"github.com/DavidRHerbert/koor/internal/compliance"
 	"github.com/DavidRHerbert/koor/internal/db"
 	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/instances"
+	"github.com/DavidRHerbert/koor/internal/liveness"
 	koormcp "github.com/DavidRHerbert/koor/internal/mcp"
 	"github.com/DavidRHerbert/koor/internal/server"
 	"github.com/DavidRHerbert/koor/internal/server/serverconfig"
+	"github.com/DavidRHerbert/koor/internal/observability"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
+	"github.com/DavidRHerbert/koor/internal/templates"
+	"github.com/DavidRHerbert/koor/internal/webhooks"
 )
 
 // fileConfig mirrors the JSON structure in settings.json.
@@ -103,6 +109,34 @@ func main() {
 		AuthToken:     *authToken,
 	}
 	srv := server.New(cfg, stateStore, specReg, eventBus, instanceReg, mcpTransport, logger)
+
+	// Start liveness monitor (checks every 60s, marks stale after 5m of no heartbeat).
+	liveMon := liveness.New(instanceReg, eventBus, 5*time.Minute, 60*time.Second, logger)
+	liveMon.Start()
+	defer liveMon.Stop()
+	srv.SetLiveness(liveMon)
+
+	// Start webhook dispatcher (subscribes to all events, dispatches to registered URLs).
+	webhookDisp := webhooks.New(database, eventBus, logger)
+	webhookDisp.Start()
+	defer webhookDisp.Stop()
+	srv.SetWebhooks(webhookDisp)
+
+	// Start compliance scheduler (checks active agents every 5 minutes).
+	compSched := compliance.New(database, instanceReg, specReg, eventBus, 5*time.Minute, logger)
+	compSched.Start()
+	defer compSched.Stop()
+	srv.SetCompliance(compSched)
+
+	// Create template store.
+	templateStore := templates.New(database)
+	srv.SetTemplates(templateStore)
+
+	// Create audit log and observability metrics.
+	auditLog := audit.New(database)
+	srv.SetAudit(auditLog)
+	metricsStore := observability.New(database)
+	srv.SetObservability(metricsStore)
 
 	// Start background event pruning (every 60 seconds).
 	eventBus.StartPruning(60 * time.Second)

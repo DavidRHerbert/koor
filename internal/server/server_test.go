@@ -9,13 +9,19 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/DavidRHerbert/koor/internal/audit"
+	"github.com/DavidRHerbert/koor/internal/compliance"
 	"github.com/DavidRHerbert/koor/internal/db"
 	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/instances"
+	"github.com/DavidRHerbert/koor/internal/observability"
 	"github.com/DavidRHerbert/koor/internal/server"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
+	"github.com/DavidRHerbert/koor/internal/templates"
+	"github.com/DavidRHerbert/koor/internal/webhooks"
 )
 
 func testServer(t *testing.T, authToken string) *httptest.Server {
@@ -895,5 +901,544 @@ func TestTokenTaxCounting(t *testing.T) {
 	}
 	if metrics.TokenTax.SavingsPercent != 100.0 {
 		t.Errorf("expected 100%% savings (no MCP calls), got %.1f%%", metrics.TokenTax.SavingsPercent)
+	}
+}
+
+// --- Phase 10: State History + Rollback endpoint tests ---
+
+func TestStateHistory(t *testing.T) {
+	ts := testServer(t, "")
+
+	// Write 3 versions.
+	for i := 1; i <= 3; i++ {
+		body := fmt.Sprintf(`{"v":%d}`, i)
+		req, _ := http.NewRequest("PUT", ts.URL+"/api/state/my-key", strings.NewReader(body))
+		resp, _ := http.DefaultClient.Do(req)
+		resp.Body.Close()
+	}
+
+	// Get history.
+	resp, _ := http.Get(ts.URL + "/api/state/my-key?history=1")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result struct {
+		Key      string `json:"key"`
+		Versions []struct {
+			Version int64 `json:"version"`
+		} `json:"versions"`
+	}
+	json.Unmarshal(body, &result)
+	if result.Key != "my-key" {
+		t.Errorf("expected key my-key, got %s", result.Key)
+	}
+	if len(result.Versions) != 3 {
+		t.Fatalf("expected 3 versions, got %d", len(result.Versions))
+	}
+	if result.Versions[0].Version != 3 {
+		t.Errorf("expected latest version 3, got %d", result.Versions[0].Version)
+	}
+}
+
+func TestStateGetVersion(t *testing.T) {
+	ts := testServer(t, "")
+
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/state/k", strings.NewReader(`{"v":1}`))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	req, _ = http.NewRequest("PUT", ts.URL+"/api/state/k", strings.NewReader(`{"v":2}`))
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Get version 1.
+	resp, _ = http.Get(ts.URL + "/api/state/k?version=1")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if string(body) != `{"v":1}` {
+		t.Errorf("expected v1 value, got %s", body)
+	}
+
+	// Get non-existent version.
+	resp2, _ := http.Get(ts.URL + "/api/state/k?version=99")
+	resp2.Body.Close()
+	if resp2.StatusCode != 404 {
+		t.Errorf("expected 404 for version 99, got %d", resp2.StatusCode)
+	}
+}
+
+func TestStateRollback(t *testing.T) {
+	ts := testServer(t, "")
+
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/state/k", strings.NewReader(`{"v":1}`))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	req, _ = http.NewRequest("PUT", ts.URL+"/api/state/k", strings.NewReader(`{"v":2}`))
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	req, _ = http.NewRequest("PUT", ts.URL+"/api/state/k", strings.NewReader(`{"bad":"data"}`))
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Rollback to version 1.
+	resp, _ = http.Post(ts.URL+"/api/state/k?rollback=1", "application/json", nil)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("rollback: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"rolled_back":1`) {
+		t.Errorf("should report rolled_back version: %s", body)
+	}
+
+	// Verify current value is the rolled-back version.
+	resp, _ = http.Get(ts.URL + "/api/state/k")
+	defer resp.Body.Close()
+	body, _ = io.ReadAll(resp.Body)
+	if string(body) != `{"v":1}` {
+		t.Errorf("expected rolled-back value, got %s", body)
+	}
+}
+
+func TestStateRollbackNotFound(t *testing.T) {
+	ts := testServer(t, "")
+
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/state/k", strings.NewReader(`{"v":1}`))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	resp, _ = http.Post(ts.URL+"/api/state/k?rollback=99", "application/json", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("expected 404 for rollback to nonexistent version, got %d", resp.StatusCode)
+	}
+}
+
+func TestStateDiff(t *testing.T) {
+	ts := testServer(t, "")
+
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/state/k", strings.NewReader(`{"name":"Alice","age":30}`))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	req, _ = http.NewRequest("PUT", ts.URL+"/api/state/k", strings.NewReader(`{"name":"Alice","age":31,"city":"London"}`))
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	resp, _ = http.Get(ts.URL + "/api/state/k?diff=1,2")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("diff: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result struct {
+		V1    int64 `json:"v1"`
+		V2    int64 `json:"v2"`
+		Diffs []struct {
+			Path string `json:"path"`
+			Kind string `json:"kind"`
+		} `json:"diffs"`
+	}
+	json.Unmarshal(body, &result)
+	if len(result.Diffs) != 2 {
+		t.Fatalf("expected 2 diffs (age changed, city added), got %d: %s", len(result.Diffs), body)
+	}
+}
+
+// --- Phase 11: Webhooks + Compliance endpoint tests ---
+
+func testServerWithPhase11(t *testing.T) *httptest.Server {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	stateStore := state.New(database)
+	specReg := specs.New(database)
+	eventBus := events.New(database, 1000)
+	instanceReg := instances.New(database)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	cfg := server.Config{Bind: "localhost:0"}
+	srv := server.New(cfg, stateStore, specReg, eventBus, instanceReg, nil, logger)
+
+	webhookDisp := webhooks.New(database, eventBus, logger)
+	srv.SetWebhooks(webhookDisp)
+
+	compSched := compliance.New(database, instanceReg, specReg, eventBus, 1*time.Hour, logger)
+	srv.SetCompliance(compSched)
+
+	templateStore := templates.New(database)
+	srv.SetTemplates(templateStore)
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestWebhookCreateAndList(t *testing.T) {
+	ts := testServerWithPhase11(t)
+
+	// Create a webhook.
+	resp, _ := http.Post(ts.URL+"/api/webhooks", "application/json",
+		strings.NewReader(`{"id":"wh-1","url":"http://example.com/hook","patterns":["agent.*"]}`))
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("create: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"id":"wh-1"`) {
+		t.Errorf("create response should contain id: %s", body)
+	}
+
+	// List webhooks.
+	resp, _ = http.Get(ts.URL + "/api/webhooks")
+	defer resp.Body.Close()
+	body, _ = io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("list: expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "wh-1") {
+		t.Errorf("list should contain wh-1: %s", body)
+	}
+}
+
+func TestWebhookDeleteAndNotFound(t *testing.T) {
+	ts := testServerWithPhase11(t)
+
+	// Create then delete.
+	http.Post(ts.URL+"/api/webhooks", "application/json",
+		strings.NewReader(`{"id":"wh-del","url":"http://example.com/hook"}`))
+
+	req, _ := http.NewRequest("DELETE", ts.URL+"/api/webhooks/wh-del", nil)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("delete: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Delete nonexistent.
+	req, _ = http.NewRequest("DELETE", ts.URL+"/api/webhooks/nonexistent", nil)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("delete nonexistent: expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestWebhookCreateValidation(t *testing.T) {
+	ts := testServerWithPhase11(t)
+
+	// Missing id.
+	resp, _ := http.Post(ts.URL+"/api/webhooks", "application/json",
+		strings.NewReader(`{"url":"http://example.com"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for missing id, got %d", resp.StatusCode)
+	}
+
+	// Missing url.
+	resp, _ = http.Post(ts.URL+"/api/webhooks", "application/json",
+		strings.NewReader(`{"id":"wh-x"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for missing url, got %d", resp.StatusCode)
+	}
+}
+
+func TestComplianceHistoryAndRun(t *testing.T) {
+	ts := testServerWithPhase11(t)
+
+	// History should be empty initially.
+	resp, _ := http.Get(ts.URL + "/api/compliance/history")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("history: expected 200, got %d", resp.StatusCode)
+	}
+	if string(body) != "[]\n" {
+		t.Errorf("expected empty array, got: %s", body)
+	}
+
+	// Force a compliance run (no active instances, so 0 runs).
+	resp, _ = http.Post(ts.URL+"/api/compliance/run", "application/json", nil)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("run: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"checked":true`) {
+		t.Errorf("run response should contain checked:true: %s", body)
+	}
+	if !strings.Contains(string(body), `"count":0`) {
+		t.Errorf("run response should contain count:0 with no active agents: %s", body)
+	}
+}
+
+// --- Phase 12: Capabilities + Templates endpoint tests ---
+
+func TestInstanceSetCapabilities(t *testing.T) {
+	ts := testServerWithPhase11(t)
+
+	// Register an instance.
+	id := registerInstance(t, ts.URL, "cap-agent")
+
+	// Set capabilities.
+	resp, _ := http.Post(ts.URL+"/api/instances/"+id+"/capabilities", "application/json",
+		strings.NewReader(`{"capabilities":["code-review","testing"]}`))
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("set capabilities: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "code-review") {
+		t.Errorf("response should contain code-review: %s", body)
+	}
+
+	// Verify via GET.
+	resp, _ = http.Get(ts.URL + "/api/instances/" + id)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "code-review") {
+		t.Errorf("instance GET should include capabilities: %s", body)
+	}
+}
+
+func TestInstanceFilterByCapability(t *testing.T) {
+	ts := testServerWithPhase11(t)
+
+	id1 := registerInstance(t, ts.URL, "agent-cap-a")
+	id2 := registerInstance(t, ts.URL, "agent-cap-b")
+
+	http.Post(ts.URL+"/api/instances/"+id1+"/capabilities", "application/json",
+		strings.NewReader(`{"capabilities":["code-review"]}`))
+	http.Post(ts.URL+"/api/instances/"+id2+"/capabilities", "application/json",
+		strings.NewReader(`{"capabilities":["deployment"]}`))
+
+	// Filter by capability.
+	resp, _ := http.Get(ts.URL + "/api/instances?capability=code-review")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "agent-cap-a") {
+		t.Errorf("should contain agent-cap-a: %s", body)
+	}
+	if strings.Contains(string(body), "agent-cap-b") {
+		t.Errorf("should not contain agent-cap-b: %s", body)
+	}
+}
+
+func TestTemplateCreateAndList(t *testing.T) {
+	ts := testServerWithPhase11(t)
+
+	// Create a template.
+	resp, _ := http.Post(ts.URL+"/api/templates", "application/json",
+		strings.NewReader(`{"id":"tpl-1","name":"Security Rules","kind":"rules","data":[{"rule_id":"no-eval"}],"tags":["security"]}`))
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("create: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"id":"tpl-1"`) {
+		t.Errorf("create response should contain id: %s", body)
+	}
+
+	// List templates.
+	resp, _ = http.Get(ts.URL + "/api/templates")
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("list: expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "tpl-1") {
+		t.Errorf("list should contain tpl-1: %s", body)
+	}
+
+	// Get template.
+	resp, _ = http.Get(ts.URL + "/api/templates/tpl-1")
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("get: expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "Security Rules") {
+		t.Errorf("get should contain name: %s", body)
+	}
+}
+
+func TestTemplateDeleteAndNotFound(t *testing.T) {
+	ts := testServerWithPhase11(t)
+
+	// Create then delete.
+	http.Post(ts.URL+"/api/templates", "application/json",
+		strings.NewReader(`{"id":"tpl-del","name":"Temp","data":{}}`))
+
+	req, _ := http.NewRequest("DELETE", ts.URL+"/api/templates/tpl-del", nil)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("delete: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Delete nonexistent.
+	req, _ = http.NewRequest("DELETE", ts.URL+"/api/templates/nonexistent", nil)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("delete nonexistent: expected 404, got %d", resp.StatusCode)
+	}
+}
+
+// --- Phase 13 tests ---
+
+func testServerWithPhase13(t *testing.T) *httptest.Server {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	stateStore := state.New(database)
+	specReg := specs.New(database)
+	eventBus := events.New(database, 1000)
+	instanceReg := instances.New(database)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	cfg := server.Config{Bind: "localhost:0"}
+	srv := server.New(cfg, stateStore, specReg, eventBus, instanceReg, nil, logger)
+
+	webhookDisp := webhooks.New(database, eventBus, logger)
+	srv.SetWebhooks(webhookDisp)
+
+	compSched := compliance.New(database, instanceReg, specReg, eventBus, 1*time.Hour, logger)
+	srv.SetCompliance(compSched)
+
+	templateStore := templates.New(database)
+	srv.SetTemplates(templateStore)
+
+	auditLog := audit.New(database)
+	srv.SetAudit(auditLog)
+
+	metricsStore := observability.New(database)
+	srv.SetObservability(metricsStore)
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestAuditQueryEmpty(t *testing.T) {
+	ts := testServerWithPhase13(t)
+
+	resp, _ := http.Get(ts.URL + "/api/audit")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if string(body) != "[]\n" {
+		t.Errorf("expected empty array, got %s", body)
+	}
+}
+
+func TestAuditAfterStatePut(t *testing.T) {
+	ts := testServerWithPhase13(t)
+
+	// Put state to trigger audit.
+	resp, _ := http.NewRequest("PUT", ts.URL+"/api/state/test-key", strings.NewReader(`{"hello":"world"}`))
+	resp2, _ := http.DefaultClient.Do(resp)
+	resp2.Body.Close()
+	if resp2.StatusCode != 200 {
+		t.Fatalf("state put: expected 200, got %d", resp2.StatusCode)
+	}
+
+	// Query audit log.
+	resp3, _ := http.Get(ts.URL + "/api/audit")
+	body, _ := io.ReadAll(resp3.Body)
+	resp3.Body.Close()
+	if resp3.StatusCode != 200 {
+		t.Fatalf("audit: expected 200, got %d", resp3.StatusCode)
+	}
+
+	var entries []map[string]any
+	json.Unmarshal(body, &entries)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	if entries[0]["action"] != "state.put" {
+		t.Errorf("expected action state.put, got %v", entries[0]["action"])
+	}
+	if entries[0]["resource"] != "test-key" {
+		t.Errorf("expected resource test-key, got %v", entries[0]["resource"])
+	}
+}
+
+func TestAuditSummary(t *testing.T) {
+	ts := testServerWithPhase13(t)
+
+	// Create some audit entries via mutations.
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/state/key1", strings.NewReader(`{"a":1}`))
+	r, _ := http.DefaultClient.Do(req)
+	r.Body.Close()
+
+	req, _ = http.NewRequest("DELETE", ts.URL+"/api/state/key1", nil)
+	r, _ = http.DefaultClient.Do(req)
+	r.Body.Close()
+
+	// Get summary.
+	resp, _ := http.Get(ts.URL + "/api/audit/summary")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var summary map[string]any
+	json.Unmarshal(body, &summary)
+	total := summary["total_entries"].(float64)
+	if total != 2 {
+		t.Errorf("expected 2 total entries, got %v", total)
+	}
+}
+
+func TestAgentMetricsEmpty(t *testing.T) {
+	ts := testServerWithPhase13(t)
+
+	resp, _ := http.Get(ts.URL + "/api/metrics/agents")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if string(body) != "[]\n" {
+		t.Errorf("expected empty array, got %s", body)
+	}
+}
+
+func TestAgentMetricsGetById(t *testing.T) {
+	ts := testServerWithPhase13(t)
+
+	resp, _ := http.Get(ts.URL + "/api/metrics/agents/nonexistent")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if string(body) != "[]\n" {
+		t.Errorf("expected empty array, got %s", body)
 	}
 }

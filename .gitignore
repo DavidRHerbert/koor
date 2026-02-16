@@ -18,8 +18,8 @@ data.db-shm
 .claude/
 *.swp
 
-# Internal prompts/planning docs
-Doc/Promptin/
+# Internal docs (planning, comparisons, etc.)
+Doc/
 
 # Go
 /vendor/

@@ -183,6 +183,57 @@ func (b *Bus) History(ctx context.Context, last int, topicPattern string) ([]Eve
 	return events, rows.Err()
 }
 
+// HistoryByTimeRange returns events filtered by time range, source, and topic pattern.
+// All filter parameters are optional — pass zero time or empty strings to skip.
+func (b *Bus) HistoryByTimeRange(ctx context.Context, from, to time.Time, source, topicPattern string, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := `SELECT id, topic, data, source, created_at FROM events WHERE 1=1`
+	args := []any{}
+
+	if !from.IsZero() {
+		query += ` AND created_at >= ?`
+		args = append(args, from.UTC().Format("2006-01-02 15:04:05"))
+	}
+	if !to.IsZero() {
+		query += ` AND created_at <= ?`
+		args = append(args, to.UTC().Format("2006-01-02 15:04:05"))
+	}
+	if source != "" {
+		query += ` AND source = ?`
+		args = append(args, source)
+	}
+
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := b.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query events by time range: %w", err)
+	}
+	defer rows.Close()
+
+	var result []Event
+	for rows.Next() {
+		var ev Event
+		var createdAt string
+		if err := rows.Scan(&ev.ID, &ev.Topic, &ev.Data, &ev.Source, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		ev.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+
+		if topicPattern != "" && topicPattern != "*" {
+			if !matchTopic(topicPattern, ev.Topic) {
+				continue
+			}
+		}
+		result = append(result, ev)
+	}
+	return result, rows.Err()
+}
+
 func (b *Bus) getByID(ctx context.Context, id int64) (*Event, error) {
 	var ev Event
 	var createdAt string

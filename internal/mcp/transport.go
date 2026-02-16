@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/DavidRHerbert/koor/internal/contracts"
 	"github.com/DavidRHerbert/koor/internal/instances"
@@ -44,6 +45,7 @@ func New(registry *instances.Registry, specReg *specs.Registry, endpoints server
 			mcplib.WithString("workspace", mcplib.Description("Workspace path or identifier")),
 			mcplib.WithString("intent", mcplib.Description("Current intent or task description")),
 			mcplib.WithString("stack", mcplib.Description("Technology stack identifier (e.g. 'goth', 'react')")),
+			mcplib.WithString("capabilities", mcplib.Description("Comma-separated list of capabilities (e.g. 'code-review,testing,deployment')")),
 		),
 		t.handleRegisterInstance,
 	)
@@ -51,10 +53,11 @@ func New(registry *instances.Registry, specReg *specs.Registry, endpoints server
 	// Tool 2: discover_instances
 	srv.AddTool(
 		mcplib.NewTool("discover_instances",
-			mcplib.WithDescription("Discover other registered agent instances. Optionally filter by name, workspace, or stack."),
+			mcplib.WithDescription("Discover other registered agent instances. Optionally filter by name, workspace, stack, or capability."),
 			mcplib.WithString("name", mcplib.Description("Filter by agent name")),
 			mcplib.WithString("workspace", mcplib.Description("Filter by workspace")),
 			mcplib.WithString("stack", mcplib.Description("Filter by technology stack (e.g. 'goth', 'react')")),
+			mcplib.WithString("capability", mcplib.Description("Filter by capability (e.g. 'code-review')")),
 		),
 		t.handleDiscoverInstances,
 	)
@@ -133,6 +136,7 @@ func (t *Transport) handleRegisterInstance(ctx context.Context, req mcplib.CallT
 	workspace := getArg(req, "workspace")
 	intent := getArg(req, "intent")
 	stack := getArg(req, "stack")
+	capsStr := getArg(req, "capabilities")
 
 	if name == "" {
 		return mcplib.NewToolResultError("name is required"), nil
@@ -143,6 +147,16 @@ func (t *Transport) handleRegisterInstance(ctx context.Context, req mcplib.CallT
 		return mcplib.NewToolResultError(fmt.Sprintf("registration failed: %v", err)), nil
 	}
 
+	// Set capabilities if provided (comma-separated string).
+	if capsStr != "" {
+		caps := strings.Split(capsStr, ",")
+		for i := range caps {
+			caps[i] = strings.TrimSpace(caps[i])
+		}
+		t.registry.SetCapabilities(ctx, inst.ID, caps)
+		inst.Capabilities = caps
+	}
+
 	data, _ := json.MarshalIndent(map[string]any{
 		"instance_id":   inst.ID,
 		"token":         inst.Token,
@@ -150,6 +164,7 @@ func (t *Transport) handleRegisterInstance(ctx context.Context, req mcplib.CallT
 		"workspace":     inst.Workspace,
 		"intent":        inst.Intent,
 		"stack":         inst.Stack,
+		"capabilities":  inst.Capabilities,
 		"status":        inst.Status,
 		"registered_at": inst.RegisteredAt,
 		"message":       "Registered (status: pending). Activate via CLI: ./koor-cli activate " + inst.ID,
@@ -162,8 +177,9 @@ func (t *Transport) handleDiscoverInstances(ctx context.Context, req mcplib.Call
 	name := getArg(req, "name")
 	workspace := getArg(req, "workspace")
 	stack := getArg(req, "stack")
+	capability := getArg(req, "capability")
 
-	items, err := t.registry.Discover(ctx, name, workspace, stack)
+	items, err := t.registry.Discover(ctx, name, workspace, stack, capability)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("discovery failed: %v", err)), nil
 	}

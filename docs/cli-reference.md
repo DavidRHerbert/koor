@@ -142,6 +142,54 @@ koor-cli state delete api-contract
 {"deleted":"api-contract"}
 ```
 
+### state history
+
+List version history for a state key.
+
+```
+koor-cli state history <key> [--limit N]
+```
+
+**Options**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--limit` | `50` | Maximum versions to return |
+
+**Example**
+
+```
+koor-cli state history api-contract --limit 10
+```
+
+### state rollback
+
+Rollback a state key to a previous version.
+
+```
+koor-cli state rollback <key> --version N
+```
+
+**Example**
+
+```
+koor-cli state rollback api-contract --version 2
+```
+
+### state diff
+
+Show the JSON diff between two versions of a state key.
+
+```
+koor-cli state diff <key> --v1 N --v2 N
+```
+
+**Example**
+
+```
+koor-cli state diff api-contract --v1 1 --v2 3
+```
+
 ---
 
 ## specs
@@ -254,10 +302,10 @@ koor-cli events publish api.change.contract --data '{"version":"2.0","breaking":
 
 ### events history
 
-Retrieve recent events.
+Retrieve recent events. Supports time-range and source filtering.
 
 ```
-koor-cli events history [--last N] [--topic pattern]
+koor-cli events history [--last N] [--topic pattern] [--from ISO] [--to ISO] [--source name]
 ```
 
 **Options**
@@ -266,6 +314,9 @@ koor-cli events history [--last N] [--topic pattern]
 |------|---------|-------------|
 | `--last` | `50` | Number of events to return |
 | `--topic` | *(all)* | Glob pattern to filter topics |
+| `--from` | *(none)* | Start time (RFC 3339) |
+| `--to` | *(none)* | End time (RFC 3339) |
+| `--source` | *(none)* | Filter by event source |
 
 **Examples**
 
@@ -273,6 +324,8 @@ koor-cli events history [--last N] [--topic pattern]
 koor-cli events history
 koor-cli events history --last 10
 koor-cli events history --last 100 --topic "api.*"
+koor-cli events history --from 2026-02-16T14:00:00Z --to 2026-02-16T15:00:00Z
+koor-cli events history --source agent-1
 ```
 
 ### events subscribe
@@ -386,6 +439,222 @@ koor-cli instances get 550e8400-e29b-41d4-a716-446655440000
 
 ---
 
+## activate
+
+Activate an agent instance (confirms CLI connectivity after registration).
+
+```
+koor-cli activate <instance-id>
+```
+
+**Example**
+
+```
+koor-cli activate 550e8400-e29b-41d4-a716-446655440000
+```
+
+---
+
+## instances stale
+
+List stale (unresponsive) agents.
+
+```
+koor-cli instances stale
+```
+
+---
+
+## webhooks
+
+Manage webhook registrations for event notifications.
+
+### webhooks list
+
+```
+koor-cli webhooks list
+```
+
+### webhooks add
+
+```
+koor-cli webhooks add --id <id> --url <url> [--patterns "a.*,b.*"] [--secret <s>]
+```
+
+**Options**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--id` | Yes | Webhook identifier |
+| `--url` | Yes | URL to POST events to |
+| `--patterns` | No | Comma-separated event patterns (default `*`) |
+| `--secret` | No | HMAC signing secret |
+
+**Example**
+
+```
+koor-cli webhooks add --id slack-notify --url https://hooks.example.com/koor --patterns "agent.*,compliance.*"
+```
+
+### webhooks delete
+
+```
+koor-cli webhooks delete <id>
+```
+
+### webhooks test
+
+Fire a test event to verify connectivity.
+
+```
+koor-cli webhooks test <id>
+```
+
+---
+
+## compliance
+
+View and trigger contract compliance checks.
+
+### compliance history
+
+```
+koor-cli compliance history [--instance_id <id>] [--limit N]
+```
+
+**Options**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--instance_id` | *(all)* | Filter by agent instance |
+| `--limit` | `50` | Maximum results |
+
+### compliance run
+
+Force an immediate compliance check across all active agents.
+
+```
+koor-cli compliance run
+```
+
+---
+
+## templates
+
+Manage shareable template bundles.
+
+### templates list
+
+```
+koor-cli templates list [--kind <k>] [--tag <t>]
+```
+
+**Options**
+
+| Flag | Description |
+|------|-------------|
+| `--kind` | Filter by kind (`rules`, `contracts`, `bundle`) |
+| `--tag` | Filter by tag |
+
+### templates get
+
+```
+koor-cli templates get <id>
+```
+
+### templates create
+
+```
+koor-cli templates create --id <id> --name <name> --kind <kind> --file <path> [--tags "a,b"]
+```
+
+**Options**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--id` | Yes | Template identifier |
+| `--name` | Yes | Human-readable name |
+| `--kind` | Yes | `rules`, `contracts`, or `bundle` |
+| `--file` | Yes | Path to JSON data file |
+| `--tags` | No | Comma-separated tags |
+
+### templates delete
+
+```
+koor-cli templates delete <id>
+```
+
+### templates apply
+
+Apply a template to a project.
+
+```
+koor-cli templates apply <id> --project <project>
+```
+
+---
+
+## audit
+
+Query the immutable audit log.
+
+```
+koor-cli audit [--actor <a>] [--action <a>] [--from ISO] [--to ISO] [--limit N]
+```
+
+**Options**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--actor` | *(all)* | Filter by actor |
+| `--action` | *(all)* | Filter by action type (e.g. `state.put`) |
+| `--from` | *(none)* | Start time (ISO 8601) |
+| `--to` | *(none)* | End time (ISO 8601) |
+| `--limit` | `50` | Maximum entries |
+
+**Example**
+
+```
+koor-cli audit --action state.put --limit 10
+koor-cli audit --actor agent-1 --from 2026-02-16T00:00:00Z
+```
+
+### audit summary
+
+Aggregated summary of audit activity.
+
+```
+koor-cli audit summary [--from ISO] [--to ISO]
+```
+
+---
+
+## metrics agents
+
+Query per-agent operational metrics.
+
+```
+koor-cli metrics agents [--instance_id <id>] [--period <p>]
+koor-cli metrics agents <id> [--period <p>]
+```
+
+**Options**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--instance_id` | *(all)* | Filter by agent instance |
+| `--period` | *(all)* | Time period prefix (e.g. `2026-02-16`) |
+
+**Examples**
+
+```
+koor-cli metrics agents
+koor-cli metrics agents --period 2026-02-16
+koor-cli metrics agents 550e8400-e29b-41d4-a716-446655440000
+```
+
+---
+
 ## Full Command Summary
 
 ```
@@ -398,6 +667,9 @@ koor-cli state get <key>
 koor-cli state set <key> --file <path>
 koor-cli state set <key> --data <json>
 koor-cli state delete <key>
+koor-cli state history <key> [--limit N]
+koor-cli state rollback <key> --version N
+koor-cli state diff <key> --v1 N --v2 N
 
 koor-cli specs list <project>
 koor-cli specs get <project>/<name>
@@ -406,15 +678,45 @@ koor-cli specs set <project>/<name> --data <json>
 koor-cli specs delete <project>/<name>
 
 koor-cli events publish <topic> --data <json>
-koor-cli events history [--last N] [--topic pattern]
+koor-cli events history [--last N] [--topic pattern] [--from ISO] [--to ISO] [--source name]
 koor-cli events subscribe [pattern]
+
+koor-cli contract set <project>/<name> --file <path>
+koor-cli contract get <project>/<name>
+koor-cli contract validate <project>/<name> --endpoint "POST /api/x" --direction request --payload '{...}'
+koor-cli contract test <project>/<name> --target http://localhost:8080
 
 koor-cli rules import --file <path>
 koor-cli rules export [--source <sources>] [--output <path>]
 
+koor-cli webhooks list
+koor-cli webhooks add --id <id> --url <url> [--patterns "a.*,b.*"] [--secret <s>]
+koor-cli webhooks delete <id>
+koor-cli webhooks test <id>
+
+koor-cli compliance history [--instance_id <id>] [--limit N]
+koor-cli compliance run
+
+koor-cli templates list [--kind <k>] [--tag <t>]
+koor-cli templates get <id>
+koor-cli templates create --id <id> --name <name> --kind <kind> --file <path> [--tags "a,b"]
+koor-cli templates delete <id>
+koor-cli templates apply <id> --project <project>
+
+koor-cli audit [--actor <a>] [--action <a>] [--from ISO] [--to ISO] [--limit N]
+koor-cli audit summary [--from ISO] [--to ISO]
+
+koor-cli metrics agents [--instance_id <id>] [--period <p>]
+koor-cli metrics agents <id> [--period <p>]
+
+koor-cli backup --output <path>
+koor-cli restore --file <path>
+
 koor-cli register <name> [--workspace <path>] [--intent <text>]
+koor-cli activate <instance-id>
 koor-cli instances list
 koor-cli instances get <id>
+koor-cli instances stale
 ```
 
 ---

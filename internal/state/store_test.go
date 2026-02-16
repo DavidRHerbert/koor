@@ -3,6 +3,7 @@ package state_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/DavidRHerbert/koor/internal/db"
@@ -127,5 +128,200 @@ func TestHashChangesOnUpdate(t *testing.T) {
 
 	if e1.Hash == e2.Hash {
 		t.Error("expected different hashes for different values")
+	}
+}
+
+// --- Phase 10: State History + Rollback tests ---
+
+func TestHistoryTracksVersions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	s.Put(ctx, "k", []byte(`{"v":1}`), "application/json", "agent-a")
+	s.Put(ctx, "k", []byte(`{"v":2}`), "application/json", "agent-b")
+	s.Put(ctx, "k", []byte(`{"v":3}`), "application/json", "agent-c")
+
+	history, err := s.History(ctx, "k", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("expected 3 history entries, got %d", len(history))
+	}
+	// Most recent first.
+	if history[0].Version != 3 {
+		t.Errorf("expected version 3 first, got %d", history[0].Version)
+	}
+	if history[2].Version != 1 {
+		t.Errorf("expected version 1 last, got %d", history[2].Version)
+	}
+}
+
+func TestHistoryLimit(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	for i := 1; i <= 5; i++ {
+		s.Put(ctx, "k", []byte(fmt.Sprintf(`{"v":%d}`, i)), "application/json", "")
+	}
+
+	history, err := s.History(ctx, "k", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 entries with limit=2, got %d", len(history))
+	}
+	if history[0].Version != 5 {
+		t.Errorf("expected latest version 5, got %d", history[0].Version)
+	}
+}
+
+func TestHistoryEmptyKey(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	history, err := s.History(ctx, "nonexistent", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 0 {
+		t.Errorf("expected 0 entries for nonexistent key, got %d", len(history))
+	}
+}
+
+func TestGetVersion(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	s.Put(ctx, "k", []byte(`{"v":1}`), "application/json", "")
+	s.Put(ctx, "k", []byte(`{"v":2}`), "application/json", "")
+	s.Put(ctx, "k", []byte(`{"v":3}`), "application/json", "")
+
+	// Get historical version.
+	e1, err := s.GetVersion(ctx, "k", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(e1.Value) != `{"v":1}` {
+		t.Errorf("expected v1 value, got %s", e1.Value)
+	}
+
+	// Get current version.
+	e3, err := s.GetVersion(ctx, "k", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(e3.Value) != `{"v":3}` {
+		t.Errorf("expected v3 value, got %s", e3.Value)
+	}
+
+	// Non-existent version.
+	_, err = s.GetVersion(ctx, "k", 99)
+	if err != sql.ErrNoRows {
+		t.Errorf("expected sql.ErrNoRows for version 99, got %v", err)
+	}
+}
+
+func TestRollback(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	s.Put(ctx, "k", []byte(`{"v":1}`), "application/json", "agent-a")
+	s.Put(ctx, "k", []byte(`{"v":2}`), "application/json", "agent-b")
+	s.Put(ctx, "k", []byte(`{"bad":"data"}`), "application/json", "rogue-agent")
+
+	// Rollback to version 1.
+	entry, err := s.Rollback(ctx, "k", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Version != 4 {
+		t.Errorf("expected new version 4 after rollback, got %d", entry.Version)
+	}
+	if string(entry.Value) != `{"v":1}` {
+		t.Errorf("expected rolled-back value, got %s", entry.Value)
+	}
+	if entry.UpdatedBy != "rollback:v1" {
+		t.Errorf("expected updated_by rollback:v1, got %s", entry.UpdatedBy)
+	}
+}
+
+func TestRollbackNotFound(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	s.Put(ctx, "k", []byte(`{"v":1}`), "application/json", "")
+
+	_, err := s.Rollback(ctx, "k", 99)
+	if err == nil {
+		t.Error("expected error for nonexistent rollback version")
+	}
+}
+
+func TestDiff(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	s.Put(ctx, "k", []byte(`{"name":"Alice","age":30,"city":"London"}`), "application/json", "")
+	s.Put(ctx, "k", []byte(`{"name":"Alice","age":31,"country":"UK"}`), "application/json", "")
+
+	diffs, err := s.Diff(ctx, "k", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Expect: age changed, city removed, country added.
+	if len(diffs) != 3 {
+		t.Fatalf("expected 3 diffs, got %d: %+v", len(diffs), diffs)
+	}
+
+	diffMap := map[string]string{}
+	for _, d := range diffs {
+		diffMap[d.Path] = d.Kind
+	}
+
+	if diffMap["age"] != "changed" {
+		t.Errorf("expected age changed, got %s", diffMap["age"])
+	}
+	if diffMap["city"] != "removed" {
+		t.Errorf("expected city removed, got %s", diffMap["city"])
+	}
+	if diffMap["country"] != "added" {
+		t.Errorf("expected country added, got %s", diffMap["country"])
+	}
+}
+
+func TestDiffNonJSON(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	s.Put(ctx, "k", []byte("plain text v1"), "text/plain", "")
+	s.Put(ctx, "k", []byte("plain text v2"), "text/plain", "")
+
+	_, err := s.Diff(ctx, "k", 1, 2)
+	if err == nil {
+		t.Error("expected error diffing non-JSON values")
+	}
+}
+
+func TestRollbackPreservesHistory(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	s.Put(ctx, "k", []byte(`{"v":1}`), "application/json", "")
+	s.Put(ctx, "k", []byte(`{"v":2}`), "application/json", "")
+	s.Rollback(ctx, "k", 1) // creates version 3
+
+	history, err := s.History(ctx, "k", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should have versions 3, 2, 1.
+	if len(history) != 3 {
+		t.Fatalf("expected 3 versions after rollback, got %d", len(history))
+	}
+	if history[0].Version != 3 {
+		t.Errorf("expected latest version 3, got %d", history[0].Version)
 	}
 }

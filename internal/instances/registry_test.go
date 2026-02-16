@@ -77,7 +77,7 @@ func TestDiscover(t *testing.T) {
 	reg.Register(ctx, "cursor", "/ws/alpha", "", "")
 
 	// Filter by name.
-	items, err := reg.Discover(ctx, "claude", "", "")
+	items, err := reg.Discover(ctx, "claude", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestDiscover(t *testing.T) {
 	}
 
 	// Filter by workspace.
-	items, err = reg.Discover(ctx, "", "/ws/alpha", "")
+	items, err = reg.Discover(ctx, "", "/ws/alpha", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestDiscover(t *testing.T) {
 	}
 
 	// Filter by both.
-	items, err = reg.Discover(ctx, "cursor", "/ws/alpha", "")
+	items, err = reg.Discover(ctx, "cursor", "/ws/alpha", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestDiscoverByStack(t *testing.T) {
 	reg.Register(ctx, "scanner-c", "/ws/proj", "", "react")
 
 	// Filter by stack.
-	items, err := reg.Discover(ctx, "", "", "goth")
+	items, err := reg.Discover(ctx, "", "", "goth", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestDiscoverByStack(t *testing.T) {
 	}
 
 	// Filter by stack + name.
-	items, err = reg.Discover(ctx, "scanner-c", "", "react")
+	items, err = reg.Discover(ctx, "scanner-c", "", "react", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestDiscoverByStack(t *testing.T) {
 	}
 
 	// No matches.
-	items, err = reg.Discover(ctx, "", "", "vue")
+	items, err = reg.Discover(ctx, "", "", "vue", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +269,94 @@ func TestActivateNotFound(t *testing.T) {
 	err := reg.Activate(ctx, "nonexistent")
 	if err != sql.ErrNoRows {
 		t.Errorf("expected ErrNoRows, got %v", err)
+	}
+}
+
+func TestSetCapabilities(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	inst, _ := reg.Register(ctx, "agent-caps", "", "", "goth")
+
+	// Initial capabilities should be empty.
+	got, _ := reg.Get(ctx, inst.ID)
+	if len(got.Capabilities) != 0 {
+		t.Errorf("expected empty capabilities, got %v", got.Capabilities)
+	}
+
+	// Set capabilities.
+	err := reg.SetCapabilities(ctx, inst.ID, []string{"code-review", "testing", "deployment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ = reg.Get(ctx, inst.ID)
+	if len(got.Capabilities) != 3 {
+		t.Fatalf("expected 3 capabilities, got %d: %v", len(got.Capabilities), got.Capabilities)
+	}
+	if got.Capabilities[0] != "code-review" {
+		t.Errorf("expected code-review, got %s", got.Capabilities[0])
+	}
+}
+
+func TestSetCapabilitiesNotFound(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	err := reg.SetCapabilities(ctx, "nonexistent", []string{"x"})
+	if err != sql.ErrNoRows {
+		t.Errorf("expected sql.ErrNoRows, got %v", err)
+	}
+}
+
+func TestDiscoverByCapability(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	inst1, _ := reg.Register(ctx, "agent-a", "", "", "")
+	inst2, _ := reg.Register(ctx, "agent-b", "", "", "")
+
+	reg.SetCapabilities(ctx, inst1.ID, []string{"code-review", "testing"})
+	reg.SetCapabilities(ctx, inst2.ID, []string{"deployment", "monitoring"})
+
+	// Filter by capability.
+	items, err := reg.Discover(ctx, "", "", "", "code-review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 instance with code-review, got %d", len(items))
+	}
+	if items[0].ID != inst1.ID {
+		t.Errorf("expected %s, got %s", inst1.ID, items[0].ID)
+	}
+
+	// No matches.
+	items, err = reg.Discover(ctx, "", "", "", "nonexistent-cap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected 0 matches, got %d", len(items))
+	}
+}
+
+func TestCapabilitiesInList(t *testing.T) {
+	reg := testRegistry(t)
+	ctx := context.Background()
+
+	inst, _ := reg.Register(ctx, "agent-list-caps", "", "", "")
+	reg.SetCapabilities(ctx, inst.ID, []string{"testing"})
+
+	items, err := reg.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 instance, got %d", len(items))
+	}
+	if len(items[0].Capabilities) != 1 || items[0].Capabilities[0] != "testing" {
+		t.Errorf("expected capabilities [testing], got %v", items[0].Capabilities)
 	}
 }
 

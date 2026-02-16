@@ -57,6 +57,21 @@ func main() {
 	case "activate":
 		cfg := loadConfig()
 		handleActivate(cfg, os.Args[2:])
+	case "webhooks":
+		cfg := loadConfig()
+		handleWebhooks(cfg, os.Args[2:])
+	case "compliance":
+		cfg := loadConfig()
+		handleCompliance(cfg, os.Args[2:])
+	case "templates":
+		cfg := loadConfig()
+		handleTemplates(cfg, os.Args[2:])
+	case "audit":
+		cfg := loadConfig()
+		handleAudit(cfg, os.Args[2:])
+	case "metrics":
+		cfg := loadConfig()
+		handleMetricsCLI(cfg, os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -79,6 +94,9 @@ Commands:
   state set <key> --file <path>   Set state from file
   state set <key> --data <json>   Set state from inline data
   state delete <key>              Delete state key
+  state history <key> [--limit N] List version history for a key
+  state rollback <key> --version N  Rollback to a previous version
+  state diff <key> --v1 N --v2 N  Diff two versions of a key
 
   specs list <project>            List specs for a project
   specs get <project>/<name>      Get a spec
@@ -87,7 +105,7 @@ Commands:
   specs delete <project>/<name>   Delete a spec
 
   events publish <topic> --data <json>   Publish an event
-  events history [--last N] [--topic pattern]   Recent events
+  events history [--last N] [--topic pattern] [--from ISO] [--to ISO] [--source name]
   events subscribe [pattern]     Stream events via WebSocket
 
   contract set <project>/<name> --file <path>   Store a contract
@@ -98,6 +116,26 @@ Commands:
   rules import --file <path>     Import rules from JSON file
   rules export [--source <s>] [--output <path>]   Export rules as JSON
 
+  webhooks list                   List registered webhooks
+  webhooks add --id <id> --url <url> [--patterns "a.*,b.*"] [--secret <s>]
+  webhooks delete <id>           Delete a webhook
+  webhooks test <id>             Fire a test event to a webhook
+
+  compliance history [--instance_id <id>] [--limit N]   Recent compliance runs
+  compliance run                 Force compliance check now
+
+  templates list [--kind <k>] [--tag <t>]              List templates
+  templates get <id>                                    Get template details
+  templates create --id <id> --name <name> --kind <kind> --file <path> [--tags "a,b"]
+  templates delete <id>                                 Delete a template
+  templates apply <id> --project <project>              Apply template to project
+
+  audit [--actor <a>] [--action <a>] [--from ISO] [--to ISO] [--limit N]  Query audit log
+  audit summary [--from ISO] [--to ISO]               Audit summary report
+
+  metrics agents [--instance_id <id>] [--period <p>]  Per-agent metrics
+  metrics agents <id> [--period <p>]                   Metrics for specific agent
+
   backup --output <path>         Backup all data to JSON file
   restore --file <path>          Restore data from backup file
 
@@ -105,6 +143,7 @@ Commands:
   activate <instance-id>         Activate agent (confirms CLI connectivity)
   instances list                 List registered instances
   instances get <id>             Get instance details
+  instances stale                List stale (unresponsive) agents
 
 Flags:
   --pretty                        Pretty-print JSON output
@@ -261,6 +300,86 @@ func handleState(cfg *config, args []string) {
 		defer resp.Body.Close()
 		printResponse(resp)
 
+	case "history":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli state history <key> [--limit N]")
+			os.Exit(1)
+		}
+		key := args[1]
+		limit := ""
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--limit" && i+1 < len(args) {
+				limit = args[i+1]
+				i++
+			}
+		}
+		path := "/api/state/" + key + "?history=1"
+		if limit != "" {
+			path += "&limit=" + limit
+		}
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "rollback":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli state rollback <key> --version N")
+			os.Exit(1)
+		}
+		key := args[1]
+		version := ""
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--version" && i+1 < len(args) {
+				version = args[i+1]
+				i++
+			}
+		}
+		if version == "" {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli state rollback <key> --version N")
+			os.Exit(1)
+		}
+		resp, err := doRequest(cfg, "POST", "/api/state/"+key+"?rollback="+version, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "diff":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli state diff <key> --v1 N --v2 N")
+			os.Exit(1)
+		}
+		key := args[1]
+		v1, v2 := "", ""
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--v1":
+				if i+1 < len(args) {
+					v1 = args[i+1]
+					i++
+				}
+			case "--v2":
+				if i+1 < len(args) {
+					v2 = args[i+1]
+					i++
+				}
+			}
+		}
+		if v1 == "" || v2 == "" {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli state diff <key> --v1 N --v2 N")
+			os.Exit(1)
+		}
+		resp, err := doRequest(cfg, "GET", "/api/state/"+key+"?diff="+v1+","+v2, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
 	default:
 		fmt.Fprintf(os.Stderr, "unknown state command: %s\n", args[0])
 		os.Exit(1)
@@ -377,6 +496,21 @@ func handleEvents(cfg *config, args []string) {
 			case "--topic":
 				if i+1 < len(args) {
 					params = append(params, "topic="+args[i+1])
+					i++
+				}
+			case "--from":
+				if i+1 < len(args) {
+					params = append(params, "from="+args[i+1])
+					i++
+				}
+			case "--to":
+				if i+1 < len(args) {
+					params = append(params, "to="+args[i+1])
+					i++
+				}
+			case "--source":
+				if i+1 < len(args) {
+					params = append(params, "source="+args[i+1])
 					i++
 				}
 			}
@@ -513,7 +647,7 @@ func handleActivate(cfg *config, args []string) {
 
 func handleInstances(cfg *config, args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: koor-cli instances <list|get> [args]")
+		fmt.Fprintln(os.Stderr, "usage: koor-cli instances <list|get|stale> [args]")
 		os.Exit(1)
 	}
 
@@ -538,10 +672,450 @@ func handleInstances(cfg *config, args []string) {
 		defer resp.Body.Close()
 		printResponse(resp)
 
+	case "stale":
+		resp, err := doRequest(cfg, "GET", "/api/instances/stale", nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
 	default:
 		fmt.Fprintf(os.Stderr, "unknown instances command: %s\n", args[0])
 		os.Exit(1)
 	}
+}
+
+// --- Webhook commands ---
+
+func handleWebhooks(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli webhooks <list|add|delete|test> [args]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "list":
+		resp, err := doRequest(cfg, "GET", "/api/webhooks", nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "add":
+		id, url, patterns, secret := "", "", "", ""
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--id":
+				if i+1 < len(args) {
+					id = args[i+1]
+					i++
+				}
+			case "--url":
+				if i+1 < len(args) {
+					url = args[i+1]
+					i++
+				}
+			case "--patterns":
+				if i+1 < len(args) {
+					patterns = args[i+1]
+					i++
+				}
+			case "--secret":
+				if i+1 < len(args) {
+					secret = args[i+1]
+					i++
+				}
+			}
+		}
+		if id == "" || url == "" {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli webhooks add --id <id> --url <url> [--patterns \"a.*,b.*\"] [--secret <s>]")
+			os.Exit(1)
+		}
+		patternList := []string{"*"}
+		if patterns != "" {
+			patternList = strings.Split(patterns, ",")
+		}
+		patternsJSON, _ := json.Marshal(patternList)
+		payload := fmt.Sprintf(`{"id":%q,"url":%q,"patterns":%s,"secret":%q}`, id, url, string(patternsJSON), secret)
+		resp, err := doRequest(cfg, "POST", "/api/webhooks", strings.NewReader(payload))
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "delete":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli webhooks delete <id>")
+			os.Exit(1)
+		}
+		resp, err := doRequest(cfg, "DELETE", "/api/webhooks/"+args[1], nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "test":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli webhooks test <id>")
+			os.Exit(1)
+		}
+		resp, err := doRequest(cfg, "POST", "/api/webhooks/"+args[1]+"/test", nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown webhooks command: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+// --- Compliance commands ---
+
+func handleCompliance(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli compliance <history|run> [args]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "history":
+		path := "/api/compliance/history"
+		params := []string{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--instance_id":
+				if i+1 < len(args) {
+					params = append(params, "instance_id="+args[i+1])
+					i++
+				}
+			case "--limit":
+				if i+1 < len(args) {
+					params = append(params, "limit="+args[i+1])
+					i++
+				}
+			}
+		}
+		if len(params) > 0 {
+			path += "?" + strings.Join(params, "&")
+		}
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "run":
+		resp, err := doRequest(cfg, "POST", "/api/compliance/run", nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown compliance command: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+// --- Template commands ---
+
+func handleTemplates(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli templates <list|get|create|delete|apply> [args]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "list":
+		path := "/api/templates"
+		params := []string{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--kind":
+				if i+1 < len(args) {
+					params = append(params, "kind="+args[i+1])
+					i++
+				}
+			case "--tag":
+				if i+1 < len(args) {
+					params = append(params, "tag="+args[i+1])
+					i++
+				}
+			}
+		}
+		if len(params) > 0 {
+			path += "?" + strings.Join(params, "&")
+		}
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "get":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli templates get <id>")
+			os.Exit(1)
+		}
+		resp, err := doRequest(cfg, "GET", "/api/templates/"+args[1], nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "create":
+		id, name, kind, filePath, tags := "", "", "rules", "", ""
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--id":
+				if i+1 < len(args) {
+					id = args[i+1]
+					i++
+				}
+			case "--name":
+				if i+1 < len(args) {
+					name = args[i+1]
+					i++
+				}
+			case "--kind":
+				if i+1 < len(args) {
+					kind = args[i+1]
+					i++
+				}
+			case "--file":
+				if i+1 < len(args) {
+					filePath = args[i+1]
+					i++
+				}
+			case "--tags":
+				if i+1 < len(args) {
+					tags = args[i+1]
+					i++
+				}
+			}
+		}
+		if id == "" || name == "" || filePath == "" {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli templates create --id <id> --name <name> --kind <kind> --file <path> [--tags \"a,b\"]")
+			os.Exit(1)
+		}
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fatal(fmt.Errorf("read file %s: %w", filePath, err))
+		}
+
+		tagList := []string{}
+		if tags != "" {
+			for _, t := range strings.Split(tags, ",") {
+				tagList = append(tagList, strings.TrimSpace(t))
+			}
+		}
+
+		reqBody, _ := json.Marshal(map[string]any{
+			"id":   id,
+			"name": name,
+			"kind": kind,
+			"data": json.RawMessage(data),
+			"tags": tagList,
+		})
+
+		resp, err := doRequest(cfg, "POST", "/api/templates", strings.NewReader(string(reqBody)))
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "delete":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli templates delete <id>")
+			os.Exit(1)
+		}
+		resp, err := doRequest(cfg, "DELETE", "/api/templates/"+args[1], nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "apply":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli templates apply <id> --project <project>")
+			os.Exit(1)
+		}
+		tmplID := args[1]
+		project := ""
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--project" && i+1 < len(args) {
+				project = args[i+1]
+				i++
+			}
+		}
+		if project == "" {
+			fmt.Fprintln(os.Stderr, "usage: koor-cli templates apply <id> --project <project>")
+			os.Exit(1)
+		}
+
+		reqBody, _ := json.Marshal(map[string]string{"project": project})
+		resp, err := doRequest(cfg, "POST", "/api/templates/"+tmplID+"/apply", strings.NewReader(string(reqBody)))
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown templates command: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+// --- Audit commands ---
+
+func handleAudit(cfg *config, args []string) {
+	// Check for "summary" subcommand.
+	if len(args) > 0 && args[0] == "summary" {
+		path := "/api/audit/summary"
+		params := []string{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--from":
+				if i+1 < len(args) {
+					params = append(params, "from="+args[i+1])
+					i++
+				}
+			case "--to":
+				if i+1 < len(args) {
+					params = append(params, "to="+args[i+1])
+					i++
+				}
+			}
+		}
+		if len(params) > 0 {
+			path += "?" + strings.Join(params, "&")
+		}
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+		return
+	}
+
+	// Default: query audit log.
+	path := "/api/audit"
+	params := []string{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--actor":
+			if i+1 < len(args) {
+				params = append(params, "actor="+args[i+1])
+				i++
+			}
+		case "--action":
+			if i+1 < len(args) {
+				params = append(params, "action="+args[i+1])
+				i++
+			}
+		case "--from":
+			if i+1 < len(args) {
+				params = append(params, "from="+args[i+1])
+				i++
+			}
+		case "--to":
+			if i+1 < len(args) {
+				params = append(params, "to="+args[i+1])
+				i++
+			}
+		case "--limit":
+			if i+1 < len(args) {
+				params = append(params, "limit="+args[i+1])
+				i++
+			}
+		}
+	}
+	if len(params) > 0 {
+		path += "?" + strings.Join(params, "&")
+	}
+	resp, err := doRequest(cfg, "GET", path, nil)
+	if err != nil {
+		fatal(err)
+	}
+	defer resp.Body.Close()
+	printResponse(resp)
+}
+
+// --- Agent metrics commands ---
+
+func handleMetricsCLI(cfg *config, args []string) {
+	if len(args) < 1 || args[0] != "agents" {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli metrics agents [--instance_id <id>] [--period <p>]")
+		fmt.Fprintln(os.Stderr, "       koor-cli metrics agents <id> [--period <p>]")
+		os.Exit(1)
+	}
+
+	// Check if the second arg is an ID (not a flag).
+	if len(args) >= 2 && !strings.HasPrefix(args[1], "--") {
+		// metrics agents <id> [--period <p>]
+		id := args[1]
+		path := "/api/metrics/agents/" + id
+		period := ""
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--period" && i+1 < len(args) {
+				period = args[i+1]
+				i++
+			}
+		}
+		if period != "" {
+			path += "?period=" + period
+		}
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+		return
+	}
+
+	// metrics agents [--instance_id <id>] [--period <p>]
+	path := "/api/metrics/agents"
+	params := []string{}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--instance_id":
+			if i+1 < len(args) {
+				params = append(params, "instance_id="+args[i+1])
+				i++
+			}
+		case "--period":
+			if i+1 < len(args) {
+				params = append(params, "period="+args[i+1])
+				i++
+			}
+		}
+	}
+	if len(params) > 0 {
+		path += "?" + strings.Join(params, "&")
+	}
+	resp, err := doRequest(cfg, "GET", path, nil)
+	if err != nil {
+		fatal(err)
+	}
+	defer resp.Body.Close()
+	printResponse(resp)
 }
 
 // --- Rules commands ---
