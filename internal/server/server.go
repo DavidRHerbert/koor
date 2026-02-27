@@ -22,6 +22,7 @@ import (
 	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/instances"
 	"github.com/DavidRHerbert/koor/internal/liveness"
+	"github.com/DavidRHerbert/koor/internal/llmcost"
 	"github.com/DavidRHerbert/koor/internal/observability"
 	"github.com/DavidRHerbert/koor/internal/specs"
 	"github.com/DavidRHerbert/koor/internal/state"
@@ -50,6 +51,7 @@ type Server struct {
 	templateStore *templates.Store
 	auditLog      *audit.Log
 	metricsStore  *observability.Store
+	llmCostStore  *llmcost.Store
 	mcpHandler    http.Handler
 	startTime   time.Time
 	logger      *slog.Logger
@@ -99,6 +101,11 @@ func (s *Server) SetAudit(a *audit.Log) {
 // SetObservability attaches an observability metrics store.
 func (s *Server) SetObservability(o *observability.Store) {
 	s.metricsStore = o
+}
+
+// SetLLMCost attaches an LLM cost tracking store.
+func (s *Server) SetLLMCost(lc *llmcost.Store) {
+	s.llmCostStore = lc
 }
 
 type ctxKey string
@@ -206,6 +213,11 @@ func (s *Server) Handler() http.Handler {
 	// Token tax metrics endpoints (NOT counted — infrastructure, not agent calls).
 	mux.HandleFunc("GET /api/metrics", s.handleMetrics)
 	mux.HandleFunc("POST /api/metrics/reset", s.handleMetricsReset)
+
+	// LLM cost tracking endpoints.
+	mux.HandleFunc("POST /api/llm/usage", s.countREST(s.handleLLMUsageRecord))
+	mux.HandleFunc("GET /api/llm/usage", s.countREST(s.handleLLMUsageQuery))
+	mux.HandleFunc("GET /api/llm/usage/summary", s.countREST(s.handleLLMUsageSummary))
 
 	// MCP endpoint (StreamableHTTP) — counted as MCP calls.
 	if s.mcpHandler != nil {

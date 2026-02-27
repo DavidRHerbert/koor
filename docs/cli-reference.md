@@ -655,6 +655,86 @@ koor-cli metrics agents 550e8400-e29b-41d4-a716-446655440000
 
 ---
 
+## llm
+
+Track LLM token usage and costs across agents, projects, and models.
+
+### llm usage
+
+Query LLM usage records. Filter by instance, project, or session tag.
+
+```
+koor-cli llm usage [--instance <id>] [--project <name>] [--session <tag>] [--from ISO] [--to ISO] [--limit N]
+```
+
+**Options**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--instance` | *(all)* | Filter by agent instance ID |
+| `--project` | *(all)* | Filter by project |
+| `--session` | *(all)* | Filter by session tag |
+| `--from` | *(none)* | Start time (ISO 8601) |
+| `--to` | *(none)* | End time (ISO 8601) |
+| `--limit` | `50` | Maximum records to return |
+
+**Examples**
+
+```
+koor-cli llm usage
+koor-cli llm usage --instance agent-1 --limit 20
+koor-cli llm usage --project Truck-Wash --from 2026-02-28T00:00:00Z
+koor-cli llm usage --session refactor-auth
+```
+
+### llm summary
+
+Aggregated usage summary grouped by a chosen dimension.
+
+```
+koor-cli llm summary [--by model|instance|project|session_tag] [--from ISO] [--to ISO]
+```
+
+**Options**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--by` | `project` | Grouping dimension: `instance`, `project`, `model`, or `session_tag` |
+| `--from` | *(none)* | Start time (ISO 8601) |
+| `--to` | *(none)* | End time (ISO 8601) |
+
+**Examples**
+
+```
+koor-cli llm summary
+koor-cli llm summary --by model
+koor-cli llm summary --by instance --from 2026-02-28T00:00:00Z
+```
+
+**Output**
+
+```json
+{
+  "group_by": "model",
+  "groups": {
+    "claude-sonnet-4-20250514": {
+      "total_tokens_in": 15000,
+      "total_tokens_out": 8000,
+      "total_cost_usd": 0.12,
+      "request_count": 10
+    }
+  },
+  "total": {
+    "total_tokens_in": 15000,
+    "total_tokens_out": 8000,
+    "total_cost_usd": 0.12,
+    "request_count": 10
+  }
+}
+```
+
+---
+
 ## Full Command Summary
 
 ```
@@ -708,6 +788,9 @@ koor-cli audit summary [--from ISO] [--to ISO]
 
 koor-cli metrics agents [--instance_id <id>] [--period <p>]
 koor-cli metrics agents <id> [--period <p>]
+
+koor-cli llm usage [--instance <id>] [--project <name>] [--session <tag>] [--from ISO] [--to ISO] [--limit N]
+koor-cli llm summary [--by model|instance|project|session_tag] [--from ISO] [--to ISO]
 
 koor-cli backup --output <path>
 koor-cli restore --file <path>

@@ -119,6 +119,7 @@ Six words to set up and run a multi-agent project.
 | **Templates** | Shareable rule/contract bundles — export from one project, apply to another |
 | **Audit** | Immutable log of every configuration change (who, what, when, outcome) |
 | **Agent Metrics** | Per-agent call counts and violation rates in hourly buckets |
+| **LLM Cost Tracking** | Per-agent/project/model token and cost recording with summaries |
 | **Token Tax** | Dashboard tracks MCP vs REST calls and token savings |
 | **Dashboard** | Visual overview at :9847 |
 | **Wizard** | `koor-wizard` scaffolds entire projects interactively |
@@ -197,12 +198,12 @@ CLI ───REST───/
 - **4 dependencies:** modernc.org/sqlite, nhooyr.io/websocket, mark3labs/mcp-go, charmbracelet/huh
 - **Pure Go:** CGO_ENABLED=0, cross-compiles to all platforms
 - **3 binaries:** koor-server (embedded dashboard via go:embed), koor-cli, koor-wizard
-- **15 packages:** state, specs, events, instances, liveness, webhooks, compliance, templates, audit, observability, contracts, mcp, wizard, server, db
+- **16 packages:** state, specs, events, instances, liveness, webhooks, compliance, templates, audit, observability, contracts, llmcost, mcp, wizard, server, db
 
 ## Development
 
 ```bash
-go test ./... -v -count=1    # 201 tests
+go test ./... -v -count=1    # 211 tests
 go build ./...               # Build all
 ```
 

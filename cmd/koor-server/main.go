@@ -16,6 +16,7 @@ import (
 	"github.com/DavidRHerbert/koor/internal/events"
 	"github.com/DavidRHerbert/koor/internal/instances"
 	"github.com/DavidRHerbert/koor/internal/liveness"
+	"github.com/DavidRHerbert/koor/internal/llmcost"
 	koormcp "github.com/DavidRHerbert/koor/internal/mcp"
 	"github.com/DavidRHerbert/koor/internal/server"
 	"github.com/DavidRHerbert/koor/internal/server/serverconfig"
@@ -137,6 +138,8 @@ func main() {
 	srv.SetAudit(auditLog)
 	metricsStore := observability.New(database)
 	srv.SetObservability(metricsStore)
+	llmCostStore := llmcost.New(database)
+	srv.SetLLMCost(llmCostStore)
 
 	// Start background event pruning (every 60 seconds).
 	eventBus.StartPruning(60 * time.Second)

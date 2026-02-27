@@ -1285,6 +1285,7 @@ GET /api/audit?actor=agent-1&from=2026-02-16T00:00:00Z
 | `template.create` | Template created |
 | `template.delete` | Template deleted |
 | `template.apply` | Template applied to project |
+| `llm.usage` | LLM usage recorded |
 
 ### GET /api/audit/summary
 
@@ -1374,6 +1375,153 @@ Get metrics for a specific agent.
 ```
 
 Returns an empty array `[]` when no metrics exist.
+
+---
+
+## LLM Cost Tracking
+
+Track per-agent, per-project, per-model token usage and costs. Record usage after each LLM call and query summaries to understand where your budget goes.
+
+### POST /api/llm/usage
+
+Record an LLM usage entry.
+
+**Request Body**
+
+```json
+{
+  "instance_id": "550e8400-...",
+  "project": "Truck-Wash",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-20250514",
+  "tokens_in": 1500,
+  "tokens_out": 800,
+  "cost_usd": 0.012,
+  "request_type": "completion",
+  "session_tag": "refactor-auth"
+}
+```
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `provider` | Yes | — | LLM provider (e.g. `anthropic`, `openai`) |
+| `model` | Yes | — | Model identifier (e.g. `claude-sonnet-4-20250514`, `gpt-4`) |
+| `instance_id` | No | `""` | Agent instance that made the call |
+| `project` | No | `""` | Project context |
+| `tokens_in` | No | `0` | Input/prompt tokens |
+| `tokens_out` | No | `0` | Output/completion tokens |
+| `cost_usd` | No | `0` | Estimated cost in USD |
+| `request_type` | No | `completion` | `completion` or `embedding` |
+| `session_tag` | No | `""` | Grouping key for related calls |
+
+**Response** `200`
+
+```json
+{
+  "id": 42,
+  "recorded": true
+}
+```
+
+**Error** `400` — Missing provider or model.
+
+### GET /api/llm/usage
+
+Query LLM usage records. Filter by instance, project, or session tag. Only one filter is applied (priority: instance > project > session_tag > all).
+
+**Query Parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `instance` | *(none)* | Filter by agent instance ID |
+| `project` | *(none)* | Filter by project |
+| `session_tag` | *(none)* | Filter by session tag |
+| `from` | *(none)* | Start time (ISO 8601) |
+| `to` | *(none)* | End time (ISO 8601) |
+| `limit` | `50` | Maximum records to return |
+
+**Examples**
+
+```
+GET /api/llm/usage
+GET /api/llm/usage?instance=agent-1&limit=20
+GET /api/llm/usage?project=Truck-Wash&from=2026-02-16T00:00:00Z
+GET /api/llm/usage?session_tag=refactor-auth
+```
+
+**Response** `200`
+
+```json
+[
+  {
+    "id": 42,
+    "instance_id": "agent-1",
+    "project": "Truck-Wash",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "tokens_in": 1500,
+    "tokens_out": 800,
+    "cost_usd": 0.012,
+    "request_type": "completion",
+    "session_tag": "refactor-auth",
+    "created_at": "2026-02-28T14:30:00Z"
+  }
+]
+```
+
+Returns an empty array `[]` when no records match.
+
+### GET /api/llm/usage/summary
+
+Aggregated usage summary grouped by a chosen dimension. Includes both per-group breakdowns and a grand total.
+
+**Query Parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `group_by` | `project` | Grouping dimension: `instance`, `project`, `model`, or `session_tag` |
+| `from` | *(none)* | Start time (ISO 8601) |
+| `to` | *(none)* | End time (ISO 8601) |
+
+**Examples**
+
+```
+GET /api/llm/usage/summary
+GET /api/llm/usage/summary?group_by=model
+GET /api/llm/usage/summary?group_by=instance&from=2026-02-28T00:00:00Z
+```
+
+**Response** `200`
+
+```json
+{
+  "group_by": "model",
+  "from": "",
+  "to": "",
+  "groups": {
+    "claude-sonnet-4-20250514": {
+      "total_tokens_in": 15000,
+      "total_tokens_out": 8000,
+      "total_cost_usd": 0.12,
+      "request_count": 10
+    },
+    "gpt-4": {
+      "total_tokens_in": 5000,
+      "total_tokens_out": 2000,
+      "total_cost_usd": 0.08,
+      "request_count": 5
+    }
+  },
+  "total": {
+    "total_tokens_in": 20000,
+    "total_tokens_out": 10000,
+    "total_cost_usd": 0.20,
+    "request_count": 15
+  }
+}
+```
+
+**Error** `400` — Invalid `group_by` value.
 
 ---
 

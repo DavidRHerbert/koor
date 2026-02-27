@@ -176,6 +176,20 @@ func migrate(db *sql.DB) error {
 			created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
 			PRIMARY KEY (project, rule_id)
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS llm_usage (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			instance_id  TEXT NOT NULL DEFAULT '',
+			project      TEXT NOT NULL DEFAULT '',
+			provider     TEXT NOT NULL DEFAULT '',
+			model        TEXT NOT NULL DEFAULT '',
+			tokens_in    INTEGER NOT NULL DEFAULT 0,
+			tokens_out   INTEGER NOT NULL DEFAULT 0,
+			cost_usd     REAL NOT NULL DEFAULT 0,
+			request_type TEXT NOT NULL DEFAULT 'completion',
+			session_tag  TEXT NOT NULL DEFAULT '',
+			created_at   DATETIME NOT NULL DEFAULT (datetime('now'))
+		)`,
 	}
 
 	// Migrate existing databases: add columns that may not exist yet.
@@ -205,6 +219,9 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_metrics_instance ON agent_metrics(instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_llm_usage_instance ON llm_usage(instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_llm_usage_project ON llm_usage(project)`,
+		`CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at)`,
 	}
 
 	for _, ddl := range tables {

@@ -72,6 +72,9 @@ func main() {
 	case "metrics":
 		cfg := loadConfig()
 		handleMetricsCLI(cfg, os.Args[2:])
+	case "llm":
+		cfg := loadConfig()
+		handleLLM(cfg, os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -135,6 +138,11 @@ Commands:
 
   metrics agents [--instance_id <id>] [--period <p>]  Per-agent metrics
   metrics agents <id> [--period <p>]                   Metrics for specific agent
+
+  llm usage [--instance X] [--project X] [--session X] [--from ISO] [--to ISO] [--limit N]
+                                 Query LLM usage records
+  llm summary [--by model|instance|project|session_tag] [--from ISO] [--to ISO]
+                                 LLM usage summary by grouping
 
   backup --output <path>         Backup all data to JSON file
   restore --file <path>          Restore data from backup file
@@ -1587,6 +1595,100 @@ func handleRestore(cfg *config, args []string) {
 	fmt.Printf("restore complete from %s\n", filePath)
 	fmt.Printf("  state keys: %d\n", stateCount)
 	fmt.Printf("  rules: %d\n", rulesCount)
+}
+
+// --- LLM cost tracking commands ---
+
+func handleLLM(cfg *config, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: koor-cli llm <usage|summary> [args]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "usage":
+		path := "/api/llm/usage"
+		params := []string{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--instance":
+				if i+1 < len(args) {
+					params = append(params, "instance="+args[i+1])
+					i++
+				}
+			case "--project":
+				if i+1 < len(args) {
+					params = append(params, "project="+args[i+1])
+					i++
+				}
+			case "--session":
+				if i+1 < len(args) {
+					params = append(params, "session_tag="+args[i+1])
+					i++
+				}
+			case "--from":
+				if i+1 < len(args) {
+					params = append(params, "from="+args[i+1])
+					i++
+				}
+			case "--to":
+				if i+1 < len(args) {
+					params = append(params, "to="+args[i+1])
+					i++
+				}
+			case "--limit":
+				if i+1 < len(args) {
+					params = append(params, "limit="+args[i+1])
+					i++
+				}
+			}
+		}
+		if len(params) > 0 {
+			path += "?" + strings.Join(params, "&")
+		}
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	case "summary":
+		path := "/api/llm/usage/summary"
+		params := []string{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--by":
+				if i+1 < len(args) {
+					params = append(params, "group_by="+args[i+1])
+					i++
+				}
+			case "--from":
+				if i+1 < len(args) {
+					params = append(params, "from="+args[i+1])
+					i++
+				}
+			case "--to":
+				if i+1 < len(args) {
+					params = append(params, "to="+args[i+1])
+					i++
+				}
+			}
+		}
+		if len(params) > 0 {
+			path += "?" + strings.Join(params, "&")
+		}
+		resp, err := doRequest(cfg, "GET", path, nil)
+		if err != nil {
+			fatal(err)
+		}
+		defer resp.Body.Close()
+		printResponse(resp)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown llm command: %s\n", args[0])
+		os.Exit(1)
+	}
 }
 
 // --- HTTP client helpers ---
